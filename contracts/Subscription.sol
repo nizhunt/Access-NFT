@@ -2,6 +2,7 @@
 pragma solidity ^0.8.4;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Supply.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
@@ -28,10 +29,14 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
     mapping(uint256 => mapping(address => Subscription)) public subscription;
     mapping(uint256 => Content) public contentIdToContent;
     Counters.Counter private _contentIdCounter;
+    IERC20 public immutable CURRENCY;
 
-    constructor() ERC1155("") {}
+    constructor(address _tokenAddress) ERC1155("") {
+        CURRENCY = IERC20(_tokenAddress);
+    }
 
     function setURI(uint256 _contentId, string memory _newuri) public {
+        require(exists(_contentId), "setURI: Content doesn't exist");
         require(
             contentIdToContent[_contentId].serviceProvider == msg.sender,
             "serviceProvider mismatch"
@@ -49,101 +54,18 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         return contentIdToContent[_contentId].uri;
     }
 
-    function checkBalance() public view returns (uint256) {
-        return address(this).balance;
-    }
-
-    // ServiceProvider contract calls the mint function.
-    // emit _contentName along with contentId after mint for the ease of idenitfying contentIds.
-    // the contract doesn't store the _contentName, only emits it.
-
-    function mint(
-        uint256 _contentId,
-        uint256 _validity,
-        address _subscriber,
-        uint256 _royalty,
-        string memory _contentName,
-        bytes memory _serviceProviderSignature
-    ) public payable {
-        // check-effect-interaction pattern
-
-        // to make sure the serviceProvider has disclosed the fee they actually charged,
-        // we'll have to get the fee to this contract and then return it to the serviceProvider whenever they ask nicely.
-
-        // Bound the ServiceProvider to follow the contentIdCounter sequence:
-        require(
-            _contentId <= _contentIdCounter.current(),
-            "check NextContentIdCount fn"
-        );
-
-        address _serviceProvider = getServiceProvider(
-            _contentId,
-            _serviceProviderSignature
-        );
-
-        // Map serviceProvider to contentId in case of new Content
-        if (!exists(_contentId)) {
-            setServiceProvider(_contentId, _serviceProvider, _contentName);
-            _contentIdCounter.increment();
-        }
-
-        // Restrict other minters once a contentID is mapped to a serviceProvider
-        require(
-            contentIdToContent[_contentId].serviceProvider == _serviceProvider,
-            "serviceProvider mismatch"
-        );
-
-        subscription[_contentId][_subscriber] = Subscription(
-            block.timestamp +
-                _validity +
-                checkValidityLeft(_subscriber, _contentId),
-            msg.value,
-            // Scaling 1. royalty per unit second in validity scaled by 10^18:
-            // Scaling 2. we take royalty input scaled 10^3 ie.
-            // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
-            // they put input: 5
-            // factoring scaling no.1 & 2, we multiply 10^15 in below equation:
-            _validity == 0 ? 0 : (_royalty * msg.value * 10**15) / _validity
-        );
-        // @me add an aftermint/beforemint hook that sends the mint details to external contract...
-        // users can use _contentName to better identify the content
-        emit NewAccess(
-            _contentId,
-            _validity,
-            msg.value,
-            _subscriber,
-            _royalty,
-            _contentName
-        );
-        // Track the payment recieved from the serviceProvider
-        contentIdToContent[_contentId].fees += msg.value;
-
-        // Finally Lets Mint Baby...
-        _mint(_subscriber, _contentId, 1, "");
-    }
-
-    function mintBatch(
-        address to,
-        uint256[] memory ids,
-        uint256[] memory amounts,
-        bytes memory data
-    ) public onlyOwner {
-        _mintBatch(to, ids, amounts, data);
-    }
 
     // extracts serviceProvider Address from the signature
     // hash of 1. This contract's address 2. TotalSupply of the contentId
-    function getServiceProvider(uint256 _contentId, bytes memory _signature)
-        public
-        view
-        returns (address _serviceProvider)
+    modifier VerifiedServiceProvider(uint256 _contentId, address _serviceProvider, bytes calldata _signature)
     {
-        bytes32 messagehash = keccak256(
-            abi.encodePacked(address(this), totalSupply(_contentId))
+        bytes32 messageHash = keccak256(
+            // these are the payloads to be hashed into the service-provider's signature
+            abi.encodePacked(address(this), _contentId, totalSupply(_contentId))
         );
-        _serviceProvider = messagehash.toEthSignedMessageHash().recover(
-            _signature
-        );
+        require(_serviceProvider == messageHash.toEthSignedMessageHash().recover(
+            _signature),"serviceProvider Not Valid");
+        _;
     }
 
     function setServiceProvider(
@@ -153,20 +75,6 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
     ) internal {
         emit NewContent(_serviceProvider, _contentId, _contentName);
         contentIdToContent[_contentId].serviceProvider = _serviceProvider;
-    }
-
-    // Qn: Why can't we do the below calculation on Front-end quering the state variables from the contract?
-
-    // Ans: We want to make the logic of access immutable, so that the involved parties-
-    //      ie. Subscriber/Service Provider/MarketPlace can't change it.
-
-    // function for the ServiceProvider Contracts to know what ContentId to put to new content mint.
-    function getNextContentIdCount()
-        public
-        view
-        returns (uint256 _nextContentIdCount)
-    {
-        _nextContentIdCount = _contentIdCounter.current();
     }
 
     // function check how much time in seconds is left in the subscription
@@ -182,12 +90,99 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
             block.timestamp;
     }
 
+
+    // ServiceProvider calls the mint function.
+    // emit _contentName along with contentId after mint for the ease of identifying contentIds.
+    // the contract doesn't store the _contentName, only emits it.
+
+
+    function mint(
+        uint256 _contentId,
+        uint256 _validity,
+        address _subscriber,
+        uint256 _royalty,
+        uint256 _subscriptionFee,
+        address _serviceProvider,
+        string calldata _contentName,
+        bytes calldata _serviceProviderSignature
+    ) public payable VerifiedServiceProvider(_contentId, _serviceProvider, _serviceProviderSignature) {
+
+        require(
+            CURRENCY.transferFrom(msg.sender,address(this),_subscriptionFee),
+            "Fee Transfer Failed" );
+
+        // Bound the caller to follow the contentIdCounter sequence:
+        require(
+            _contentId <= _contentIdCounter.current(),
+            "check NextContentIdCount fn"
+        );
+
+        // Map serviceProvider to contentId in case of new Content
+        if (!exists(_contentId)) {
+            setServiceProvider(_contentId, _serviceProvider, _contentName);
+            _contentIdCounter.increment();
+        } else {
+            // Restrict other minters once a contentID is mapped to a serviceProvider
+            require(
+                contentIdToContent[_contentId].serviceProvider == _serviceProvider,
+                "serviceProvider mismatch"
+            );
+        }
+
+        subscription[_contentId][_subscriber] = Subscription(
+            block.timestamp +
+                _validity +
+                checkValidityLeft(_subscriber, _contentId),
+            _subscriptionFee,
+            // Scaling 1. royalty per unit second in validity scaled by 10^18:
+            // Scaling 2. we take royalty input scaled 10^3 ie.
+            // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
+            // they put input: 5
+            // factoring scaling no.1 & 2, we multiply 10^15 in below equation:
+            _validity == 0 ? 0 : (_royalty * _subscriptionFee * 10**15) / _validity
+        );
+        // @audit-ok add an after-mint/before-mint hook that sends the mint details to external contract
+        // users can use _contentName to better identify the content
+        emit NewAccess(
+            _contentId,
+            _serviceProvider,
+            _validity,
+            _subscriptionFee,
+            _subscriber,
+            _royalty,
+            _contentName
+        );
+        // Track the payment recieved from the serviceProvider
+        contentIdToContent[_contentId].fees += _subscriptionFee;
+
+        // Finally Lets Mint Baby...
+        _mint(_subscriber, _contentId, 1, "");
+    }
+    // @audit-ok have we taken care of this
+    function mintBatch(
+        address to,
+        uint256[] memory ids,
+        uint256[] memory amounts,
+        bytes memory data
+    ) public onlyOwner {
+        _mintBatch(to, ids, amounts, data);
+    }
+
+    // function for the ServiceProvider Contracts to know what ContentId to put to new content mint.
+    function getNextContentIdCount()
+        public
+        view
+        returns (uint256 _nextContentIdCount)
+    {
+        _nextContentIdCount = _contentIdCounter.current();
+    }
+
     function checkNetRoyalty(address _subscriber, uint256 _contentId)
         public
         view
         returns (uint256 netRoyalty)
     {
-        // Remove the scaling we introduced at at the time of saving the royaly
+        // Remove the scaling we introduced at at the time of saving the royalty
         netRoyalty =
             (
                 (checkValidityLeft(_subscriber, _contentId) *
@@ -197,22 +192,7 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
             10**18;
     }
 
-    function access(address _subscriber, uint256 _contentId)
-        public
-        view
-        returns (bool key)
-    {
-        require(exists(_contentId), "Content doesn't exist");
-        require(
-            balanceOf(_subscriber, _contentId) != 0,
-            "you havn't subscribed yet"
-        );
-        checkValidityLeft(_subscriber, _contentId) == 0
-            ? key = false
-            : key = true;
-    }
-
-    // Before Transfering Ownership, change the storage of subscription details:
+    // Before Transferring Ownership, change the storage of subscription details:
     function _beforeTokenTransfer(
         address operator,
         address from,
@@ -220,7 +200,7 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         uint256[] memory ids,
         uint256[] memory amounts,
         bytes memory data
-    ) internal virtual override {
+    ) internal override {
         super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
 
         if (from != address(0)) {
@@ -236,8 +216,6 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         }
     }
 
-    // Disabling the default non-payable functions because we want each exchange of hands to pay royalty to the service-provider
-
     function safeTransferFrom(
         address from,
         address to,
@@ -245,9 +223,17 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         uint256 amount,
         bytes memory data
     ) public virtual override {
-        revert("Use transferToken Function");
+        require(
+            from == _msgSender() || isApprovedForAll(from, _msgSender()),
+            "Caller isn't owner or approved"
+        );
+        uint256 netRoyalty = checkNetRoyalty(from, id);
+        require(CURRENCY.transferFrom(msg.sender,address(this),netRoyalty), "Pay Royalty Fee" );
+        contentIdToContent[id].fees += netRoyalty;
+        _safeTransferFrom(from, to, id, amount, data);
     }
 
+    // @audit-ok try to shift this logic to beforeTokenTransfer()
     function safeBatchTransferFrom(
         address from,
         address to,
@@ -255,34 +241,6 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         uint256[] memory amounts,
         bytes memory data
     ) public virtual override {
-        revert("Use BatchTransferToken Function");
-    }
-
-    function transferToken(
-        address from,
-        address to,
-        uint256 id,
-        uint256 amount,
-        bytes memory data
-    ) public payable {
-        require(
-            from == _msgSender() || isApprovedForAll(from, _msgSender()),
-            "Caller isn't owner or approved"
-        );
-        uint256 netRoyalty = checkNetRoyalty(from, id);
-        require(msg.value >= netRoyalty, "pay royalty fee");
-        contentIdToContent[id].fees += netRoyalty;
-        _safeTransferFrom(from, to, id, amount, data);
-    }
-
-    // @me test the below function
-    function batchTransferToken(
-        address from,
-        address to,
-        uint256[] memory ids,
-        uint256[] memory amounts,
-        bytes memory data
-    ) public payable {
         require(
             from == _msgSender() || isApprovedForAll(from, _msgSender()),
             "Caller isn't owner or approved"
@@ -295,11 +253,13 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
             netRoyalty += checkNetRoyalty(from, id);
             contentIdToContent[id].fees += netRoyalty;
         }
-        require(msg.value >= netRoyalty, "pay royalty fee");
+        require(CURRENCY.transferFrom(msg.sender,address(this),netRoyalty), "pay royalty fee");
         _safeBatchTransferFrom(from, to, ids, amounts, data);
+
     }
 
-    function checkFeesCollected() public returns (uint256 payout) {
+
+    function collectFee() internal returns (uint256 payout) {
         for (uint256 i = 0; i < _contentIdCounter.current(); i++) {
             if (contentIdToContent[i].serviceProvider == msg.sender) {
                 payout += contentIdToContent[i].fees;
@@ -311,10 +271,10 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
     // enable the service-provider to withdraw all their fee:
     function withdrawFee() public {
         // following the check-effect-interaction pattern.
-        uint256 payout = checkFeesCollected();
+        uint256 payout = collectFee();
         require(payout != 0, "you are yet to collect any fee");
-        payable(msg.sender).transfer(payout);
         emit FeeWithdrawn(payout);
+        CURRENCY.transfer(msg.sender,payout);
     }
 
     // events:
@@ -322,6 +282,7 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
     // to fire when a new subscriber is added
     event NewAccess(
         uint256 contentId,
+        address serviceProvider,
         uint256 validity,
         uint256 fee,
         address subscriber,
@@ -337,9 +298,4 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
 
     event FeeWithdrawn(uint256 fee);
 
-    // // Function to receive Ether. msg.data must be empty
-    // receive() external payable {}
-
-    // // Fallback function is called when msg.data is not empty
-    // fallback() external payable {}
 }
