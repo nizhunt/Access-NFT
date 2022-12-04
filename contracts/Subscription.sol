@@ -203,7 +203,11 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
     ) internal override {
         super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
 
+
         if (from != address(0)) {
+
+            uint256 netRoyalty;
+
             for (uint256 i = 0; i < ids.length; ++i) {
                 subscription[ids[i]][to] = Subscription(
                     subscription[ids[i]][from].expiry +
@@ -212,52 +216,15 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
                     subscription[ids[i]][from].royaltyPerUnitValidity
                 );
                 subscription[ids[i]][from] = Subscription(0, 0, 0);
+
+                netRoyalty += checkNetRoyalty(from, ids[i]);
+                contentIdToContent[ids[i]].fees += netRoyalty;
             }
+
+                require(CURRENCY.transferFrom(msg.sender,address(this),netRoyalty), "Pay Royalty Fee" );
+
         }
     }
-
-    function safeTransferFrom(
-        address from,
-        address to,
-        uint256 id,
-        uint256 amount,
-        bytes memory data
-    ) public virtual override {
-        require(
-            from == _msgSender() || isApprovedForAll(from, _msgSender()),
-            "Caller isn't owner or approved"
-        );
-        uint256 netRoyalty = checkNetRoyalty(from, id);
-        require(CURRENCY.transferFrom(msg.sender,address(this),netRoyalty), "Pay Royalty Fee" );
-        contentIdToContent[id].fees += netRoyalty;
-        _safeTransferFrom(from, to, id, amount, data);
-    }
-
-    // @audit-ok try to shift this logic to beforeTokenTransfer()
-    function safeBatchTransferFrom(
-        address from,
-        address to,
-        uint256[] memory ids,
-        uint256[] memory amounts,
-        bytes memory data
-    ) public virtual override {
-        require(
-            from == _msgSender() || isApprovedForAll(from, _msgSender()),
-            "Caller isn't owner or approved"
-        );
-
-        uint256 netRoyalty;
-
-        for (uint256 i = 0; i < ids.length; ++i) {
-            uint256 id = ids[i];
-            netRoyalty += checkNetRoyalty(from, id);
-            contentIdToContent[id].fees += netRoyalty;
-        }
-        require(CURRENCY.transferFrom(msg.sender,address(this),netRoyalty), "pay royalty fee");
-        _safeBatchTransferFrom(from, to, ids, amounts, data);
-
-    }
-
 
     function collectFee() internal returns (uint256 payout) {
         for (uint256 i = 0; i < _contentIdCounter.current(); i++) {
