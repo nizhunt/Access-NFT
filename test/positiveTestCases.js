@@ -89,10 +89,12 @@ describe("PositiveTestCases", () => {
       currency.address
     );
 
-    await currency.connect(currencyDeployer).transfer(subscriber1.address, 100);
+    await currency
+      .connect(currencyDeployer)
+      .transfer(subscriber1.address, ethers.utils.parseEther("1000"));
     await currency
       .connect(subscriber1)
-      .approve(subscriptionFactory.address, 100);
+      .approve(subscriptionFactory.address, ethers.utils.parseEther("100"));
 
     const contentId = await subscriptionFactory.getNextContentIdCount();
     const totalSupplyOfContentID = await subscriptionFactory.totalSupply(
@@ -103,7 +105,7 @@ describe("PositiveTestCases", () => {
       5000,
       subscriber1.address,
       10,
-      100,
+      ethers.utils.parseEther("100"),
       serviceProvider1.address,
     ];
     const sign = await serviceProviderSignature(
@@ -128,7 +130,7 @@ describe("PositiveTestCases", () => {
     it("Checks Currency Deployer's Balance", async () => {
       const { currency } = await loadFixture(deploySubscriptionFixture);
       expect(await currency.balanceOf(currencyDeployer.address)).to.equal(
-        10_000
+        ethers.utils.parseEther("10000")
       );
     });
 
@@ -149,18 +151,20 @@ describe("PositiveTestCases", () => {
 
       await currency
         .connect(currencyDeployer)
-        .transfer(subscriber1.address, 100);
-      expect(await currency.balanceOf(subscriber1.address)).to.equal(100);
+        .transfer(subscriber1.address, ethers.utils.parseEther("100"));
+      expect(await currency.balanceOf(subscriber1.address)).to.equal(
+        ethers.utils.parseEther("100")
+      );
       expect(await currency.balanceOf(subscriptionFactory.address)).to.equal(0);
       await currency
         .connect(subscriber1)
-        .approve(subscriptionFactory.address, 100);
+        .approve(subscriptionFactory.address, ethers.utils.parseEther("100"));
       expect(
         await currency.allowance(
           subscriber1.address,
           subscriptionFactory.address
         )
-      ).to.equal(100);
+      ).to.equal(ethers.utils.parseEther("100"));
 
       const contentId = await subscriptionFactory.getNextContentIdCount();
       const totalSupplyOfContentID = await subscriptionFactory.totalSupply(
@@ -171,7 +175,7 @@ describe("PositiveTestCases", () => {
         5000,
         subscriber1.address,
         10,
-        100,
+        ethers.utils.parseEther("100"),
         serviceProvider1.address,
       ];
       const sign = await serviceProviderSignature(
@@ -191,7 +195,7 @@ describe("PositiveTestCases", () => {
           contentId,
           serviceProvider1.address,
           5000,
-          100,
+          ethers.utils.parseEther("100"),
           subscriber1.address,
           10,
           contentName
@@ -199,7 +203,7 @@ describe("PositiveTestCases", () => {
 
       expect(await currency.balanceOf(subscriber1.address)).to.equal(0);
       expect(await currency.balanceOf(subscriptionFactory.address)).to.equal(
-        100
+        ethers.utils.parseEther("100")
       );
 
       expect(
@@ -207,7 +211,7 @@ describe("PositiveTestCases", () => {
           subscriber1.address,
           contentId
         )
-      ).to.equal(5000);
+      ).to.be.equal(5000);
 
       time.increase(1000);
 
@@ -216,19 +220,14 @@ describe("PositiveTestCases", () => {
           subscriber1.address,
           contentId
         )
-      ).to.equal(4000);
+      ).to.be.equal(4000);
     });
   });
-  //   @audit check why is royalty not getting transferred
 
   describe("transfer subscription", () => {
     it("transfers a subscription", async () => {
       const { currency, subscriptionFactory, contentId } = await loadFixture(
         deployAndMintFixture
-      );
-      console.log(
-        "before",
-        await currency.balanceOf(subscriptionFactory.address)
       );
 
       //   Validity before transfer
@@ -247,6 +246,17 @@ describe("PositiveTestCases", () => {
 
       // transfer the nft after 1000 seconds
       time.increase(1000);
+
+      // caller of the safeTransfer has to pay the royalty, giving approval for it here
+      const royaltyAmt = await subscriptionFactory.checkNetRoyalty(
+        subscriber1.address,
+        contentId
+      );
+      expect(
+        await currency
+          .connect(subscriber1)
+          .approve(subscriptionFactory.address, royaltyAmt)
+      );
 
       expect(
         await subscriptionFactory
@@ -283,12 +293,23 @@ describe("PositiveTestCases", () => {
         )
       ).to.be.closeTo(4000, 2);
 
-      console.log(
-        "royalty: ",
-        await subscriptionFactory.checkNetRoyalty(
-          subscriber1.address,
-          contentId
-        )
+      // check if the fee collected by the serviceProvider is correctly calculated
+      // TotalFee = FeeAtMint + RoyaltyAtTransfer
+      // FeeAtMint = 100 ether
+      // RoyaltyAtTransfer = (10 * 100 ether / 5000 / 10*3) * 3999
+      DECIMALS = ethers.BigNumber.from(10).pow(18);
+      // const totalFee = 100 * 10e18 + ((10 * 100 * 1e18) / 5000 / 10e3) * 3999;
+      const FeeAtMint = ethers.BigNumber.from(100).mul(DECIMALS);
+      const RoyaltyAtTransferNum = ethers.BigNumber.from(4000000).mul(DECIMALS);
+      const RoyaltyAtTransferDen = ethers.BigNumber.from(5000000);
+      const RoyaltyAtTransfer = RoyaltyAtTransferNum.div(RoyaltyAtTransferDen);
+      const TotalFee = FeeAtMint.add(RoyaltyAtTransfer);
+
+      await subscriptionFactory.connect(serviceProvider1).withdrawFee();
+
+      expect(await currency.balanceOf(serviceProvider1.address)).to.be.closeTo(
+        TotalFee,
+        ethers.BigNumber.from(10).pow(15)
       );
     });
   });

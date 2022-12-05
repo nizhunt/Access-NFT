@@ -119,12 +119,14 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
             _validity +
             checkValidityLeft(_subscriber, _contentId),
         fee: _subscriptionFee,
+        
+        // @audit change the comments
         // Scaling 1. royalty per unit second in validity scaled by 10^18:
         // Scaling 2. we take royalty input scaled 10^3 ie.
         // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
         // they put input: 5
         // factoring scaling no.1 & 2, we multiply 10^15 in below equation:
-        royaltyPerUnitValidity: (_validity == 0 ? 0 : (_royalty * _subscriptionFee * 10**15) / _validity)
+        royaltyPerUnitValidity: (_validity == 0 ? 0 : _royalty * _subscriptionFee / 10**3 / _validity)
         });
     }
 
@@ -194,7 +196,7 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         // Remove the scaling we introduced at at the time of saving the royalty
         netRoyalty =(checkValidityLeft(_subscriber, _contentId) *
                     subscription[_contentId][_subscriber]
-                        .royaltyPerUnitValidity)/10**18;
+                        .royaltyPerUnitValidity);
 
     }
 
