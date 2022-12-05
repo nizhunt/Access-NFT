@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.4;
+pragma solidity ^0.8.17;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Supply.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-/// @custom:security-contact nishantthesingh@gmial.com
 
 contract SubscriptionFactory is Ownable, ERC1155Supply {
     using Counters for Counters.Counter;
@@ -24,6 +23,15 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         string uri;
         uint256 fees;
     }
+
+    struct mintArgs {
+        uint256 _contentId;
+        uint256 _validity;
+        address _subscriber;
+        uint256 _royalty;
+        uint256 _subscriptionFee;
+        address _serviceProvider;
+        }
 
     // contentId-->subscriber-->subscription
     mapping(uint256 => mapping(address => Subscription)) public subscription;
@@ -90,32 +98,7 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
             block.timestamp;
     }
 
-
-    // ServiceProvider calls the mint function.
-    // emit _contentName along with contentId after mint for the ease of identifying contentIds.
-    // the contract doesn't store the _contentName, only emits it.
-
-
-    function mint(
-        uint256 _contentId,
-        uint256 _validity,
-        address _subscriber,
-        uint256 _royalty,
-        uint256 _subscriptionFee,
-        address _serviceProvider,
-        string calldata _contentName,
-        bytes calldata _serviceProviderSignature
-    ) public payable VerifiedServiceProvider(_contentId, _serviceProvider, _serviceProviderSignature) {
-
-        require(
-            CURRENCY.transferFrom(msg.sender,address(this),_subscriptionFee),
-            "Fee Transfer Failed" );
-
-        // Bound the caller to follow the contentIdCounter sequence:
-        require(
-            _contentId <= _contentIdCounter.current(),
-            "check NextContentIdCount fn"
-        );
+    function serviceProviderSetup(uint256 _contentId,address  _serviceProvider, string calldata _contentName) internal {
 
         // Map serviceProvider to contentId in case of new Content
         if (!exists(_contentId)) {
@@ -128,37 +111,63 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
                 "serviceProvider mismatch"
             );
         }
+    } 
 
-        subscription[_contentId][_subscriber] = Subscription(
-            block.timestamp +
-                _validity +
-                checkValidityLeft(_subscriber, _contentId),
-            _subscriptionFee,
-            // Scaling 1. royalty per unit second in validity scaled by 10^18:
-            // Scaling 2. we take royalty input scaled 10^3 ie.
-            // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
-            // they put input: 5
-            // factoring scaling no.1 & 2, we multiply 10^15 in below equation:
-            _validity == 0 ? 0 : (_royalty * _subscriptionFee * 10**15) / _validity
+    function updateSubscription(uint256 _contentId, address _subscriber, uint256 _validity, uint256 _royalty, uint256 _subscriptionFee) internal {
+        subscription[_contentId][_subscriber] = Subscription({
+        expiry: block.timestamp +
+            _validity +
+            checkValidityLeft(_subscriber, _contentId),
+        fee: _subscriptionFee,
+        // Scaling 1. royalty per unit second in validity scaled by 10^18:
+        // Scaling 2. we take royalty input scaled 10^3 ie.
+        // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
+        // they put input: 5
+        // factoring scaling no.1 & 2, we multiply 10^15 in below equation:
+        royaltyPerUnitValidity: (_validity == 0 ? 0 : (_royalty * _subscriptionFee * 10**15) / _validity)
+        });
+    }
+
+    // emit _contentName along with contentId after mint for the ease of identifying contentIds.
+    // the contract doesn't store the _contentName, only emits it.
+    function mint(
+        mintArgs calldata _mintArgs,
+        string calldata _contentName,
+        bytes calldata _serviceProviderSignature
+    ) public  VerifiedServiceProvider(_mintArgs._contentId, _mintArgs._serviceProvider, _serviceProviderSignature) {
+
+        require(
+            CURRENCY.transferFrom(msg.sender,address(this),_mintArgs._subscriptionFee),
+            "Fee Transfer Failed" );
+
+        // Bound the caller to follow the contentIdCounter sequence:
+        require(
+            _mintArgs._contentId <= _contentIdCounter.current(),
+            "check NextContentIdCount fn"
         );
+
+        serviceProviderSetup(_mintArgs._contentId,_mintArgs._serviceProvider, _contentName);
+
+        updateSubscription(_mintArgs._contentId,  _mintArgs._subscriber,  _mintArgs._validity,  _mintArgs._royalty,  _mintArgs._subscriptionFee);
+
         // @audit-ok add an after-mint/before-mint hook that sends the mint details to external contract
         // users can use _contentName to better identify the content
         emit NewAccess(
-            _contentId,
-            _serviceProvider,
-            _validity,
-            _subscriptionFee,
-            _subscriber,
-            _royalty,
+            _mintArgs._contentId,
+            _mintArgs._serviceProvider,
+            _mintArgs._validity,
+            _mintArgs._subscriptionFee,
+            _mintArgs._subscriber,
+            _mintArgs._royalty,
             _contentName
         );
-        // Track the payment recieved from the serviceProvider
-        contentIdToContent[_contentId].fees += _subscriptionFee;
+        // Track the payment received from the serviceProvider
+        contentIdToContent[_mintArgs._contentId].fees += _mintArgs._subscriptionFee;
 
         // Finally Lets Mint Baby...
-        _mint(_subscriber, _contentId, 1, "");
+        _mint(_mintArgs._subscriber, _mintArgs._contentId, 1, "");
     }
-    // @audit-ok have we taken care of this
+    // @audit-ok write a batch-mint function
     function mintBatch(
         address to,
         uint256[] memory ids,
@@ -183,13 +192,10 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         returns (uint256 netRoyalty)
     {
         // Remove the scaling we introduced at at the time of saving the royalty
-        netRoyalty =
-            (
-                (checkValidityLeft(_subscriber, _contentId) *
+        netRoyalty =(checkValidityLeft(_subscriber, _contentId) *
                     subscription[_contentId][_subscriber]
-                        .royaltyPerUnitValidity)
-            ) /
-            10**18;
+                        .royaltyPerUnitValidity)/10**18;
+
     }
 
     // Before Transferring Ownership, change the storage of subscription details:
@@ -200,7 +206,7 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
         uint256[] memory ids,
         uint256[] memory amounts,
         bytes memory data
-    ) internal override {
+    ) internal virtual override {
         super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
 
 
@@ -209,15 +215,17 @@ contract SubscriptionFactory is Ownable, ERC1155Supply {
             uint256 netRoyalty;
 
             for (uint256 i = 0; i < ids.length; ++i) {
-                subscription[ids[i]][to] = Subscription(
-                    subscription[ids[i]][from].expiry +
+                subscription[ids[i]][to] = Subscription({
+                    expiry: subscription[ids[i]][from].expiry +
                         checkValidityLeft(to, ids[i]),
-                    subscription[ids[i]][from].fee,
-                    subscription[ids[i]][from].royaltyPerUnitValidity
-                );
-                subscription[ids[i]][from] = Subscription(0, 0, 0);
+                    fee: subscription[ids[i]][from].fee,
+                    royaltyPerUnitValidity: subscription[ids[i]][from].royaltyPerUnitValidity
+                });
 
                 netRoyalty += checkNetRoyalty(from, ids[i]);
+
+                subscription[ids[i]][from] = Subscription({expiry: 0, fee: 0, royaltyPerUnitValidity: 0});
+
                 contentIdToContent[ids[i]].fees += netRoyalty;
             }
 
