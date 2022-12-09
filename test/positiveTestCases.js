@@ -24,14 +24,40 @@ const findPrivateKey = (index) => {
 };
 
 // sign message as a subscription provider to use in calling mint
+// uint256 _contentId;
+// uint256 _validity;
+// address _subscriber;
+// uint256 _royalty;
+// uint256 _subscriptionFee;
+// address _serviceProvider;
 const serviceProviderSignature = async (
   subscriptionFactoryAddress,
-  contentId,
-  totalSupplyOfContentID
+  _contentId,
+  _validity,
+  _subscriber,
+  _royalty,
+  _subscriptionFee,
+  _serviceProvider
 ) => {
   const message = ethers.utils.solidityKeccak256(
-    ["address", "uint256", "uint256"],
-    [subscriptionFactoryAddress, contentId, totalSupplyOfContentID]
+    [
+      "address",
+      "uint256",
+      "uint256",
+      "address",
+      "uint256",
+      "uint256",
+      "address",
+    ],
+    [
+      subscriptionFactoryAddress,
+      _contentId,
+      _validity,
+      _subscriber,
+      _royalty,
+      _subscriptionFee,
+      _serviceProvider,
+    ]
   );
   const arrayifyMessage = ethers.utils.arrayify(message);
   // 2 for serviceProvider1, change for other service providers
@@ -96,33 +122,30 @@ describe("PositiveTestCases", () => {
       .connect(subscriber1)
       .approve(subscriptionFactory.address, ethers.utils.parseEther("100"));
 
-    const contentId = await subscriptionFactory.getNextContentIdCount();
-    const totalSupplyOfContentID = await subscriptionFactory.totalSupply(
-      contentId
-    );
     const mintArgs = [
-      contentId,
+      0,
       5000,
       subscriber1.address,
       10,
       ethers.utils.parseEther("100"),
       serviceProvider1.address,
     ];
+
     const sign = await serviceProviderSignature(
       subscriptionFactory.address,
-      contentId,
-      totalSupplyOfContentID
+      "0",
+      "5000",
+      subscriber1.address,
+      "10",
+      ethers.utils.parseEther("100"),
+      serviceProvider1.address
     );
-    const contentName = "notflix";
 
-    await subscriptionFactory
-      .connect(subscriber1)
-      .mint(mintArgs, contentName, sign);
+    await subscriptionFactory.connect(subscriber1).mint(mintArgs, sign);
 
     return {
       currency,
       subscriptionFactory,
-      contentId,
     };
   };
 
@@ -132,14 +155,6 @@ describe("PositiveTestCases", () => {
       expect(await currency.balanceOf(currencyDeployer.address)).to.equal(
         ethers.utils.parseEther("10000")
       );
-    });
-
-    it("Checks getNextContentIdCount() method", async () => {
-      const { subscriptionFactory } = await loadFixture(
-        deploySubscriptionFixture
-      );
-      const cid = await subscriptionFactory.getNextContentIdCount();
-      expect(cid).to.equal(0);
     });
   });
 
@@ -166,39 +181,36 @@ describe("PositiveTestCases", () => {
         )
       ).to.equal(ethers.utils.parseEther("100"));
 
-      const contentId = await subscriptionFactory.getNextContentIdCount();
-      const totalSupplyOfContentID = await subscriptionFactory.totalSupply(
-        contentId
-      );
       const mintArgs = [
-        contentId,
+        0,
         5000,
         subscriber1.address,
         10,
         ethers.utils.parseEther("100"),
         serviceProvider1.address,
       ];
+
       const sign = await serviceProviderSignature(
         subscriptionFactory.address,
-        contentId,
-        totalSupplyOfContentID
+        "0",
+        "5000",
+        subscriber1.address,
+        "10",
+        ethers.utils.parseEther("100"),
+        serviceProvider1.address
       );
-      const contentName = "notflix";
 
       expect(
-        await subscriptionFactory
-          .connect(subscriber1)
-          .mint(mintArgs, contentName, sign)
+        await subscriptionFactory.connect(subscriber1).mint(mintArgs, sign)
       )
         .to.emit(subscriptionFactory, "NewAccess")
         .withArgs(
-          contentId,
+          0,
           serviceProvider1.address,
           5000,
           ethers.utils.parseEther("100"),
           subscriber1.address,
-          10,
-          contentName
+          10
         );
 
       expect(await currency.balanceOf(subscriber1.address)).to.equal(0);
@@ -207,41 +219,29 @@ describe("PositiveTestCases", () => {
       );
 
       expect(
-        await subscriptionFactory.checkValidityLeft(
-          subscriber1.address,
-          contentId
-        )
+        await subscriptionFactory.checkValidityLeft(subscriber1.address, 0)
       ).to.be.equal(5000);
 
       time.increase(1000);
 
       expect(
-        await subscriptionFactory.checkValidityLeft(
-          subscriber1.address,
-          contentId
-        )
+        await subscriptionFactory.checkValidityLeft(subscriber1.address, 0)
       ).to.be.equal(4000);
     });
   });
 
   describe("transfer subscription", () => {
     it("transfers a subscription", async () => {
-      const { currency, subscriptionFactory, contentId } = await loadFixture(
+      const { currency, subscriptionFactory } = await loadFixture(
         deployAndMintFixture
       );
 
       //   Validity before transfer
       expect(
-        await subscriptionFactory.checkValidityLeft(
-          subscriber1.address,
-          contentId
-        )
+        await subscriptionFactory.checkValidityLeft(subscriber1.address, 0)
       ).to.be.closeTo(5000, 2);
       expect(
-        await subscriptionFactory.checkValidityLeft(
-          subscriber2.address,
-          contentId
-        )
+        await subscriptionFactory.checkValidityLeft(subscriber2.address, 0)
       ).to.equal(0);
 
       // transfer the nft after 1000 seconds
@@ -250,7 +250,7 @@ describe("PositiveTestCases", () => {
       // caller of the safeTransfer has to pay the royalty, giving approval for it here
       const royaltyAmt = await subscriptionFactory.checkNetRoyalty(
         subscriber1.address,
-        contentId
+        0
       );
       expect(
         await currency
@@ -261,36 +261,24 @@ describe("PositiveTestCases", () => {
       expect(
         await subscriptionFactory
           .connect(subscriber1)
-          .safeTransferFrom(
-            subscriber1.address,
-            subscriber2.address,
-            contentId,
-            1,
-            []
-          )
+          .safeTransferFrom(subscriber1.address, subscriber2.address, 0, 1, [])
       )
         .to.emit(subscriptionFactory, "TransferSingle")
         .withArgs(
           subscriber1.address,
           subscriber1.address,
           subscriber2.address,
-          contentId,
+          0,
           1
         );
 
       // Validity after the transfer
 
       expect(
-        await subscriptionFactory.checkValidityLeft(
-          subscriber1.address,
-          contentId
-        )
+        await subscriptionFactory.checkValidityLeft(subscriber1.address, 0)
       ).to.equal(0);
       expect(
-        await subscriptionFactory.checkValidityLeft(
-          subscriber2.address,
-          contentId
-        )
+        await subscriptionFactory.checkValidityLeft(subscriber2.address, 0)
       ).to.be.closeTo(4000, 2);
 
       // check if the fee collected by the serviceProvider is correctly calculated
