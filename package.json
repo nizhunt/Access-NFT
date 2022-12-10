@@ -1,6 +1,7 @@
 {
   "name": "hardhat-project",
   "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^1.0.5",
     "@nomicfoundation/hardhat-toolbox": "^1.0.2",
     "@nomiclabs/buidler": "^1.4.8",
     "hardhat": "^2.10.0"

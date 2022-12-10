@@ -2,7 +2,6 @@
 pragma solidity ^0.8.17;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-// @audit try to remove erc1155Supply 
 import "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
@@ -44,7 +43,7 @@ contract SubscriptionFactory is Ownable, ERC1155 {
     constructor(address _tokenAddress) ERC1155("") {
         CURRENCY = IERC20(_tokenAddress);
     }
-    // @audit test this
+
     function setURI(uint256 _contentId, string memory _newuri) public {
         require(_contentId < contentIdCounter.current(), "setURI: Content doesn't exist");
         require(contentIdToContent[_contentId].serviceProvider == msg.sender, "serviceProvider mismatch");
@@ -60,10 +59,19 @@ contract SubscriptionFactory is Ownable, ERC1155 {
     modifier VerifiedServiceProvider(mintArgs calldata _mintArgs, bytes calldata _signature) {
         bytes32 messageHash = keccak256(
             // these are the payloads to be hashed into the service-provider's signature
-            abi.encodePacked(address(this), _mintArgs._contentIdTemporary, _mintArgs._validity, _mintArgs._subscriber, _mintArgs._royalty, _mintArgs._subscriptionFee, _mintArgs._serviceProvider)
+            abi.encodePacked(
+                address(this),
+                _mintArgs._contentIdTemporary,
+                _mintArgs._validity,
+                _mintArgs._subscriber,
+                _mintArgs._royalty,
+                _mintArgs._subscriptionFee,
+                _mintArgs._serviceProvider
+            )
         );
         require(
-            _mintArgs._serviceProvider == messageHash.toEthSignedMessageHash().recover(_signature), "serviceProvider Not Valid"
+            _mintArgs._serviceProvider == messageHash.toEthSignedMessageHash().recover(_signature),
+            "serviceProvider Not Valid"
         );
         _;
     }
@@ -107,26 +115,24 @@ contract SubscriptionFactory is Ownable, ERC1155 {
 
         // Bound the caller to follow the contentIdCounter sequence:
         uint256 _contentId;
-        uint256 _contentIdCurrent = contentIdCounter.current(); 
+        uint256 _contentIdCurrent = contentIdCounter.current();
         require(_mintArgs._contentIdTemporary <= _contentIdCurrent, "Content Id doesn't exist");
 
-        if(_mintArgs._contentIdTemporary == 0){
+        if (_mintArgs._contentIdTemporary == 0) {
             _contentId = _contentIdCurrent;
             setServiceProvider(_contentId, _mintArgs._serviceProvider);
             contentIdCounter.increment();
-            } else {
+        } else {
+            // Restrict other minters once a contentID is mapped to a serviceProvider
+            require(
+                contentIdToContent[_mintArgs._contentIdTemporary].serviceProvider == _mintArgs._serviceProvider,
+                "serviceProvider mismatch"
+            );
+            _contentId = _mintArgs._contentIdTemporary;
+        }
 
-                // Restrict other minters once a contentID is mapped to a serviceProvider
-                require(contentIdToContent[_mintArgs._contentIdTemporary].serviceProvider == _mintArgs._serviceProvider, "serviceProvider mismatch");
-                _contentId = _mintArgs._contentIdTemporary;
-                }
-        
         updateSubscription(
-            _contentId,
-            _mintArgs._subscriber,
-            _mintArgs._validity,
-            _mintArgs._royalty,
-            _mintArgs._subscriptionFee
+            _contentId, _mintArgs._subscriber, _mintArgs._validity, _mintArgs._royalty, _mintArgs._subscriptionFee
         );
 
         // @audit-ok add an after-mint/before-mint hook that sends the mint details to external contract
@@ -221,12 +227,7 @@ contract SubscriptionFactory is Ownable, ERC1155 {
 
     // to fire when a new subscriber is added
     event NewAccess(
-        uint256 contentId,
-        address serviceProvider,
-        uint256 validity,
-        uint256 fee,
-        address subscriber,
-        uint256 royalty
+        uint256 contentId, address serviceProvider, uint256 validity, uint256 fee, address subscriber, uint256 royalty
     );
     // to fire when a new content is added
     event NewContent(address serviceProvider, uint256 contentId);

@@ -2,7 +2,7 @@ const {
   time,
   loadFixture,
 } = require("@nomicfoundation/hardhat-network-helpers");
-const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
+require("@nomicfoundation/hardhat-chai-matchers");
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
@@ -299,6 +299,33 @@ describe("PositiveTestCases", () => {
         TotalFee,
         ethers.BigNumber.from(10).pow(15)
       );
+    });
+  });
+
+  describe("service provider sets Uri for a minted token", () => {
+    it("sets uri", async () => {
+      const { currency, subscriptionFactory } = await loadFixture(
+        deployAndMintFixture
+      );
+      await subscriptionFactory
+        .connect(serviceProvider1)
+        .setURI(0, "google.com");
+      expect(await subscriptionFactory.uri(0)).to.equal("google.com");
+    });
+  });
+
+  describe("non service provider can't sets Uri for a minted token", () => {
+    it("subscriber can't set uri", async () => {
+      const { subscriptionFactory } = await loadFixture(deployAndMintFixture);
+      await expect(
+        subscriptionFactory.connect(subscriber1).setURI(0, "yahoo.com")
+      ).to.be.revertedWith("serviceProvider mismatch");
+    });
+    it("can't set uri of a non existent id", async () => {
+      const { subscriptionFactory } = await loadFixture(deployAndMintFixture);
+      await expect(
+        subscriptionFactory.connect(serviceProvider1).setURI(1, "yahoo.com")
+      ).to.be.revertedWith("setURI: Content doesn't exist");
     });
   });
 });
