@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.17;
+pragma solidity ^0.8.15;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
@@ -37,6 +37,8 @@ contract SubscriptionFactory is Ownable, ERC1155 {
     // contentId-->subscriber-->subscription
     mapping(uint256 => mapping(address => Subscription)) public subscription;
     mapping(uint256 => Content) public contentIdToContent;
+    mapping(address => address) serviceProviderToSPOwner;
+
     Counters.Counter private contentIdCounter;
     IERC20 public immutable CURRENCY;
 
@@ -45,47 +47,90 @@ contract SubscriptionFactory is Ownable, ERC1155 {
     }
 
     function setURI(uint256 _contentId, string memory _newuri) public {
-        require(_contentId < contentIdCounter.current(), "setURI: Content doesn't exist");
-        require(contentIdToContent[_contentId].serviceProvider == msg.sender, "serviceProvider mismatch");
+        require(
+            _contentId < contentIdCounter.current(),
+            "setURI: Content doesn't exist"
+        );
+        require(
+            contentIdToContent[_contentId].serviceProvider == msg.sender,
+            "serviceProvider mismatch"
+        );
         contentIdToContent[_contentId].uri = _newuri;
     }
 
-    function uri(uint256 _contentId) public view override returns (string memory) {
-        require(_contentId < contentIdCounter.current(), "URI: Content doesn't exist");
+    function uri(
+        uint256 _contentId
+    ) public view override returns (string memory) {
+        require(
+            _contentId < contentIdCounter.current(),
+            "URI: Content doesn't exist"
+        );
         return contentIdToContent[_contentId].uri;
     }
 
+    function setSPOwner(
+        bytes calldata _signature,
+        address _serviceProvider
+    ) public {
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(msg.sender, _serviceProvider)
+        );
+        require(
+            _serviceProvider ==
+                messageHash.toEthSignedMessageHash().recover(_signature),
+            "serviceProvider Not Valid"
+        );
+        require(
+            serviceProviderToSPOwner[_serviceProvider] == address(0),
+            "Owner already set"
+        );
+        serviceProviderToSPOwner[_serviceProvider] = msg.sender;
+
+        emit SPOwnerSet(_serviceProvider, msg.sender);
+    }
+
     // extracts serviceProvider Address from the signature
-    modifier VerifiedServiceProvider(mintArgs calldata _mintArgs, bytes calldata _signature) {
+    modifier VerifiedServiceProvider(
+        mintArgs calldata _mintArgs,
+        bytes calldata _signature
+    ) {
         bytes32 messageHash = keccak256(
             // these are the payloads to be hashed into the service-provider's signature
             abi.encodePacked(
                 address(this),
                 _mintArgs._contentIdTemporary,
                 _mintArgs._validity,
-                _mintArgs._subscriber,
                 _mintArgs._royalty,
                 _mintArgs._subscriptionFee,
                 _mintArgs._serviceProvider
             )
         );
         require(
-            _mintArgs._serviceProvider == messageHash.toEthSignedMessageHash().recover(_signature),
+            _mintArgs._serviceProvider ==
+                messageHash.toEthSignedMessageHash().recover(_signature),
             "serviceProvider Not Valid"
         );
         _;
     }
 
-    function setServiceProvider(uint256 _contentId, address _serviceProvider) internal {
+    function setServiceProvider(
+        uint256 _contentId,
+        address _serviceProvider
+    ) internal {
         emit NewContent(_serviceProvider, _contentId);
         contentIdToContent[_contentId].serviceProvider = _serviceProvider;
     }
 
     // function check how much time in seconds is left in the subscription
-    function checkValidityLeft(address _subscriber, uint256 _contentId) public view returns (uint256 validityLeft) {
+    function checkValidityLeft(
+        address _subscriber,
+        uint256 _contentId
+    ) public view returns (uint256 validityLeft) {
         uint256 _expiry = subscription[_contentId][_subscriber].expiry;
         // check time left in subscription
-        _expiry <= block.timestamp ? validityLeft = 0 : validityLeft = _expiry - block.timestamp;
+        _expiry <= block.timestamp ? validityLeft = 0 : validityLeft =
+            _expiry -
+            block.timestamp;
     }
 
     function updateSubscription(
@@ -96,27 +141,41 @@ contract SubscriptionFactory is Ownable, ERC1155 {
         uint256 _subscriptionFee
     ) internal {
         subscription[_contentId][_subscriber] = Subscription({
-            expiry: block.timestamp + _validity + checkValidityLeft(_subscriber, _contentId),
+            expiry: block.timestamp +
+                _validity +
+                checkValidityLeft(_subscriber, _contentId),
             fee: _subscriptionFee,
             // Scaling: we take royalty input divided by 10^3 ie.
             // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
             // they put input: 5
-            royaltyPerUnitValidity: (_validity == 0 ? 0 : _royalty * _subscriptionFee / 10 ** 3 / _validity)
+            royaltyPerUnitValidity: (
+                _validity == 0
+                    ? 0
+                    : (_royalty * _subscriptionFee) / 10 ** 3 / _validity
+            )
         });
     }
 
-    // emit _contentName along with contentId after mint for the ease of identifying contentIds.
-    // the contract doesn't store the _contentName, only emits it.
-    function mint(mintArgs calldata _mintArgs, bytes calldata _serviceProviderSignature)
-        public
-        VerifiedServiceProvider(_mintArgs, _serviceProviderSignature)
-    {
-        require(CURRENCY.transferFrom(msg.sender, address(this), _mintArgs._subscriptionFee), "Fee Transfer Failed");
+    function mint(
+        mintArgs calldata _mintArgs,
+        bytes calldata _serviceProviderSignature
+    ) public VerifiedServiceProvider(_mintArgs, _serviceProviderSignature) {
+        require(
+            CURRENCY.transferFrom(
+                msg.sender,
+                address(this),
+                _mintArgs._subscriptionFee
+            ),
+            "Fee Transfer Failed"
+        );
 
         // Bound the caller to follow the contentIdCounter sequence:
         uint256 _contentId;
         uint256 _contentIdCurrent = contentIdCounter.current();
-        require(_mintArgs._contentIdTemporary <= _contentIdCurrent, "Content Id doesn't exist");
+        require(
+            _mintArgs._contentIdTemporary <= _contentIdCurrent,
+            "Content Id doesn't exist"
+        );
 
         if (_mintArgs._contentIdTemporary == 0) {
             _contentId = _contentIdCurrent;
@@ -125,17 +184,20 @@ contract SubscriptionFactory is Ownable, ERC1155 {
         } else {
             // Restrict other minters once a contentID is mapped to a serviceProvider
             require(
-                contentIdToContent[_mintArgs._contentIdTemporary].serviceProvider == _mintArgs._serviceProvider,
+                contentIdToContent[_mintArgs._contentIdTemporary]
+                    .serviceProvider == _mintArgs._serviceProvider,
                 "serviceProvider mismatch"
             );
             _contentId = _mintArgs._contentIdTemporary;
         }
 
         updateSubscription(
-            _contentId, _mintArgs._subscriber, _mintArgs._validity, _mintArgs._royalty, _mintArgs._subscriptionFee
+            _contentId,
+            _mintArgs._subscriber,
+            _mintArgs._validity,
+            _mintArgs._royalty,
+            _mintArgs._subscriptionFee
         );
-
-        // @audit-ok add an after-mint/before-mint hook that sends the mint details to external contract
 
         emit NewAccess(
             _contentId,
@@ -144,33 +206,39 @@ contract SubscriptionFactory is Ownable, ERC1155 {
             _mintArgs._subscriptionFee,
             _mintArgs._subscriber,
             _mintArgs._royalty
-            );
-        // Track the payment received from the serviceProvider
+        );
+        // Track the payment received  for the serviceProvider
         contentIdToContent[_contentId].fees += _mintArgs._subscriptionFee;
 
         // Finally Lets Mint Baby...
         _mint(_mintArgs._subscriber, _contentId, 1, "");
     }
-    // @audit-ok switch to newer form of errors ie. revert()
-    // @audit-ok write a batch-mint function
-    // @audit-ok implement rent logic
 
-    function mintBatch(address to, uint256[] memory ids, uint256[] memory amounts, bytes memory data)
-        public
-        onlyOwner
-    {
+    function mintBatch(
+        address to,
+        uint256[] memory ids,
+        uint256[] memory amounts,
+        bytes memory data
+    ) public onlyOwner {
         _mintBatch(to, ids, amounts, data);
     }
 
     // function for the ServiceProvider Contracts to know what ContentId to put to new content mint.
-    function getNextContentIdCount() public view returns (uint256 _nextContentIdCount) {
+    function getNextContentIdCount()
+        public
+        view
+        returns (uint256 _nextContentIdCount)
+    {
         _nextContentIdCount = contentIdCounter.current();
     }
 
-    function checkNetRoyalty(address _subscriber, uint256 _contentId) public view returns (uint256 netRoyalty) {
+    function checkNetRoyalty(
+        address _subscriber,
+        uint256 _contentId
+    ) public view returns (uint256 netRoyalty) {
         // Remove the scaling we introduced at at the time of saving the royalty
-        netRoyalty =
-            (checkValidityLeft(_subscriber, _contentId) * subscription[_contentId][_subscriber].royaltyPerUnitValidity);
+        netRoyalty = (checkValidityLeft(_subscriber, _contentId) *
+            subscription[_contentId][_subscriber].royaltyPerUnitValidity);
     }
 
     // Before Transferring Ownership, change the storage of subscription details:
@@ -189,25 +257,38 @@ contract SubscriptionFactory is Ownable, ERC1155 {
 
             for (uint256 i = 0; i < ids.length; ++i) {
                 subscription[ids[i]][to] = Subscription({
-                    expiry: subscription[ids[i]][from].expiry + checkValidityLeft(to, ids[i]),
+                    expiry: subscription[ids[i]][from].expiry +
+                        checkValidityLeft(to, ids[i]),
                     fee: subscription[ids[i]][from].fee,
-                    royaltyPerUnitValidity: subscription[ids[i]][from].royaltyPerUnitValidity
+                    royaltyPerUnitValidity: subscription[ids[i]][from]
+                        .royaltyPerUnitValidity
                 });
 
-                netRoyalty += checkNetRoyalty(from, ids[i]);
+                uint256 royalty = checkNetRoyalty(from, ids[i]);
+                emit royaltyPaidDuringTransfer(ids[i], royalty);
+                netRoyalty += royalty;
 
-                subscription[ids[i]][from] = Subscription({expiry: 0, fee: 0, royaltyPerUnitValidity: 0});
+                subscription[ids[i]][from] = Subscription({
+                    expiry: 0,
+                    fee: 0,
+                    royaltyPerUnitValidity: 0
+                });
 
                 contentIdToContent[ids[i]].fees += netRoyalty;
             }
 
-            require(CURRENCY.transferFrom(msg.sender, address(this), netRoyalty), "Pay Royalty Fee");
+            require(
+                CURRENCY.transferFrom(msg.sender, address(this), netRoyalty),
+                "Pay Royalty Fee"
+            );
         }
     }
 
-    function collectFee() internal returns (uint256 payout) {
+    function collectFee(
+        address _serviceProvider
+    ) internal returns (uint256 payout) {
         for (uint256 i = 0; i < contentIdCounter.current(); i++) {
-            if (contentIdToContent[i].serviceProvider == msg.sender) {
+            if (contentIdToContent[i].serviceProvider == _serviceProvider) {
                 payout += contentIdToContent[i].fees;
                 contentIdToContent[i].fees = 0;
             }
@@ -215,11 +296,22 @@ contract SubscriptionFactory is Ownable, ERC1155 {
     }
 
     // enable the service-provider to withdraw all their fee:
-    function withdrawFee() public {
-        // following the check-effect-interaction pattern.
-        uint256 payout = collectFee();
+    function withdrawFee(address _serviceProvider) public {
+        // address receiver;
+        address spOwner = serviceProviderToSPOwner[_serviceProvider];
+
+        if (spOwner != address(0)) {
+            require(msg.sender == spOwner, "Only owner can call withdraw");
+        } else {
+            require(
+                msg.sender == _serviceProvider,
+                "only serviceProvider can withdrw"
+            );
+        }
+
+        uint256 payout = collectFee(_serviceProvider);
         require(payout != 0, "you are yet to collect any fee");
-        emit FeeWithdrawn(payout);
+        emit FeeWithdrawn(msg.sender, payout);
         CURRENCY.transfer(msg.sender, payout);
     }
 
@@ -227,10 +319,20 @@ contract SubscriptionFactory is Ownable, ERC1155 {
 
     // to fire when a new subscriber is added
     event NewAccess(
-        uint256 contentId, address serviceProvider, uint256 validity, uint256 fee, address subscriber, uint256 royalty
+        uint256 contentId,
+        address serviceProvider,
+        uint256 validity,
+        uint256 fee,
+        address subscriber,
+        uint256 royalty
     );
+
     // to fire when a new content is added
     event NewContent(address serviceProvider, uint256 contentId);
 
-    event FeeWithdrawn(uint256 fee);
+    event FeeWithdrawn(address serviceProvider, uint256 fee);
+
+    event SPOwnerSet(address serviceProvider, address SPOwner);
+
+    event royaltyPaidDuringTransfer(uint256 contentId, uint256 royaltyPaid);
 }

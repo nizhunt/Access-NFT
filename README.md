@@ -38,3 +38,7 @@ Bob, who bought the subscription NFT from Alice at a cheap rate and with less va
 > A marketplace where subscription NFTs of the above kind can be bought, sold, and rented.
 
 ### Basically an Opensea for the Subscription NFTs.
+
+testnet deployment:
+currency: 0x160664D77f4E67e53fB010A2f2b3F9cF9Fb8ED98
+Subscription Factory: 0x3EBAc880cAf0e76231837D19FbA3b4119137aae1

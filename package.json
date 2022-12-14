@@ -4,9 +4,13 @@
     "@nomicfoundation/hardhat-chai-matchers": "^1.0.5",
     "@nomicfoundation/hardhat-toolbox": "^1.0.2",
     "@nomiclabs/buidler": "^1.4.8",
+    "@nomiclabs/hardhat-ethers": "^2.2.1",
+    "chai": "^4.3.7",
+    "ethers": "^5.7.2",
     "hardhat": "^2.10.0"
   },
   "dependencies": {
-    "@openzeppelin/contracts": "^4.7.0"
+    "@openzeppelin/contracts": "^4.7.0",
+    "dotenv": "^16.0.3"
   }
 }

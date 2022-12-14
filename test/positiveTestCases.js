@@ -40,20 +40,11 @@ const serviceProviderSignature = async (
   _serviceProvider
 ) => {
   const message = ethers.utils.solidityKeccak256(
-    [
-      "address",
-      "uint256",
-      "uint256",
-      "address",
-      "uint256",
-      "uint256",
-      "address",
-    ],
+    ["address", "uint256", "uint256", "uint256", "uint256", "address"],
     [
       subscriptionFactoryAddress,
       _contentId,
       _validity,
-      _subscriber,
       _royalty,
       _subscriptionFee,
       _serviceProvider,
@@ -114,7 +105,7 @@ describe("PositiveTestCases", () => {
     const subscriptionFactory = await SubscriptionFactory.deploy(
       currency.address
     );
-
+    // @audit increase id and mint, try putting not minted latest id to mint
     await currency
       .connect(currencyDeployer)
       .transfer(subscriber1.address, ethers.utils.parseEther("1000"));
@@ -294,6 +285,9 @@ describe("PositiveTestCases", () => {
       const TotalFee = FeeAtMint.add(RoyaltyAtTransfer);
 
       await subscriptionFactory.connect(serviceProvider1).withdrawFee();
+
+      console.log(await currency.balanceOf(serviceProvider1.address));
+      console.log(TotalFee);
 
       expect(await currency.balanceOf(serviceProvider1.address)).to.be.closeTo(
         TotalFee,
