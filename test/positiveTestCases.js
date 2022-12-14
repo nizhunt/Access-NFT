@@ -23,13 +23,6 @@ const findPrivateKey = (index) => {
   return wallet.privateKey;
 };
 
-// sign message as a subscription provider to use in calling mint
-// uint256 _contentId;
-// uint256 _validity;
-// address _subscriber;
-// uint256 _royalty;
-// uint256 _subscriptionFee;
-// address _serviceProvider;
 const serviceProviderSignature = async (
   subscriptionFactoryAddress,
   _contentId,

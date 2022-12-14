@@ -19,10 +19,14 @@ contract Accessup is Ownable, ERC1155 {
         uint256 royaltyPerUnitValidity;
     }
 
+    struct ServiceProvider {
+        address SPOwnerAddress;
+        uint256 fees;
+    }
+
     struct Content {
         address serviceProvider;
         string uri;
-        uint256 fees;
     }
 
     struct mintArgs {
@@ -37,7 +41,8 @@ contract Accessup is Ownable, ERC1155 {
     // contentId-->subscriber-->subscription
     mapping(uint256 => mapping(address => Subscription)) public subscription;
     mapping(uint256 => Content) public contentIdToContent;
-    mapping(address => address) public serviceProviderToSPOwner;
+    mapping(address => ServiceProvider)
+        public serviceProviderAddressToServiceProvider;
 
     Counters.Counter private contentIdCounter;
     IERC20 public immutable CURRENCY;
@@ -81,10 +86,12 @@ contract Accessup is Ownable, ERC1155 {
             "serviceProvider Not Valid"
         );
         require(
-            serviceProviderToSPOwner[_serviceProvider] == address(0),
+            serviceProviderAddressToServiceProvider[_serviceProvider]
+                .SPOwnerAddress == address(0),
             "Owner already set"
         );
-        serviceProviderToSPOwner[_serviceProvider] = msg.sender;
+        serviceProviderAddressToServiceProvider[_serviceProvider]
+            .SPOwnerAddress = msg.sender;
 
         emit SPOwnerSet(_serviceProvider, msg.sender);
     }
@@ -208,7 +215,8 @@ contract Accessup is Ownable, ERC1155 {
             _mintArgs._royalty
         );
         // Track the payment received  for the serviceProvider
-        contentIdToContent[_contentId].fees += _mintArgs._subscriptionFee;
+        serviceProviderAddressToServiceProvider[_mintArgs._serviceProvider]
+            .fees += _mintArgs._subscriptionFee;
 
         // Finally Lets Mint Baby...
         _mint(_mintArgs._subscriber, _contentId, 1, "");
@@ -273,8 +281,10 @@ contract Accessup is Ownable, ERC1155 {
                     fee: 0,
                     royaltyPerUnitValidity: 0
                 });
-
-                contentIdToContent[ids[i]].fees += netRoyalty;
+                address serviceProvider = contentIdToContent[ids[i]]
+                    .serviceProvider;
+                serviceProviderAddressToServiceProvider[serviceProvider]
+                    .fees += netRoyalty;
             }
 
             require(
@@ -284,32 +294,27 @@ contract Accessup is Ownable, ERC1155 {
         }
     }
 
-    function collectFee(
-        address _serviceProvider
-    ) internal returns (uint256 payout) {
-        for (uint256 i = 0; i < contentIdCounter.current(); i++) {
-            if (contentIdToContent[i].serviceProvider == _serviceProvider) {
-                payout += contentIdToContent[i].fees;
-                contentIdToContent[i].fees = 0;
-            }
-        }
-    }
-
     // enable the service-provider to withdraw all their fee:
     function withdrawFee(address _serviceProvider) public {
         // address receiver;
-        address spOwner = serviceProviderToSPOwner[_serviceProvider];
+        address spOwner = serviceProviderAddressToServiceProvider[
+            _serviceProvider
+        ].SPOwnerAddress;
 
         if (spOwner != address(0)) {
             require(msg.sender == spOwner, "Only owner can call withdraw");
         } else {
             require(
                 msg.sender == _serviceProvider,
-                "only serviceProvider can withdrw"
+                "only serviceProvider can withdraw"
             );
         }
 
-        uint256 payout = collectFee(_serviceProvider);
+        uint256 payout = serviceProviderAddressToServiceProvider[
+            _serviceProvider
+        ].fees;
+
+        serviceProviderAddressToServiceProvider[_serviceProvider].fees = 0;
         require(payout != 0, "you are yet to collect any fee");
         emit FeeWithdrawn(_serviceProvider, msg.sender, payout);
         CURRENCY.transfer(msg.sender, payout);
