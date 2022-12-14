@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-contract SubscriptionFactory is Ownable, ERC1155 {
+contract Accessup is Ownable, ERC1155 {
     using Counters for Counters.Counter;
     using ECDSA for bytes32;
     // Qn: Why is royaltyPerUnitValidity a part of Subscription struct and not Content struct?
@@ -37,7 +37,7 @@ contract SubscriptionFactory is Ownable, ERC1155 {
     // contentId-->subscriber-->subscription
     mapping(uint256 => mapping(address => Subscription)) public subscription;
     mapping(uint256 => Content) public contentIdToContent;
-    mapping(address => address) serviceProviderToSPOwner;
+    mapping(address => address) public serviceProviderToSPOwner;
 
     Counters.Counter private contentIdCounter;
     IERC20 public immutable CURRENCY;
@@ -46,7 +46,7 @@ contract SubscriptionFactory is Ownable, ERC1155 {
         CURRENCY = IERC20(_tokenAddress);
     }
 
-    function setURI(uint256 _contentId, string memory _newuri) public {
+    function setURI(uint256 _contentId, string memory _newUri) public {
         require(
             _contentId < contentIdCounter.current(),
             "setURI: Content doesn't exist"
@@ -55,7 +55,7 @@ contract SubscriptionFactory is Ownable, ERC1155 {
             contentIdToContent[_contentId].serviceProvider == msg.sender,
             "serviceProvider mismatch"
         );
-        contentIdToContent[_contentId].uri = _newuri;
+        contentIdToContent[_contentId].uri = _newUri;
     }
 
     function uri(
@@ -311,7 +311,7 @@ contract SubscriptionFactory is Ownable, ERC1155 {
 
         uint256 payout = collectFee(_serviceProvider);
         require(payout != 0, "you are yet to collect any fee");
-        emit FeeWithdrawn(msg.sender, payout);
+        emit FeeWithdrawn(_serviceProvider, msg.sender, payout);
         CURRENCY.transfer(msg.sender, payout);
     }
 
@@ -330,7 +330,7 @@ contract SubscriptionFactory is Ownable, ERC1155 {
     // to fire when a new content is added
     event NewContent(address serviceProvider, uint256 contentId);
 
-    event FeeWithdrawn(address serviceProvider, uint256 fee);
+    event FeeWithdrawn(address serviceProvider, address owner, uint256 fee);
 
     event SPOwnerSet(address serviceProvider, address SPOwner);
 

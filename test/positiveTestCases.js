@@ -70,7 +70,7 @@ describe("PositiveTestCases", () => {
     const currency = await Currency.deploy();
 
     const SubscriptionFactory = await ethers.getContractFactory(
-      "SubscriptionFactory",
+      "Accessup",
       subscriptionDeployer
     );
     const subscriptionFactory = await SubscriptionFactory.deploy(
@@ -99,7 +99,7 @@ describe("PositiveTestCases", () => {
     const currency = await Currency.deploy();
 
     const SubscriptionFactory = await ethers.getContractFactory(
-      "SubscriptionFactory",
+      "Accessup",
       subscriptionDeployer
     );
     const subscriptionFactory = await SubscriptionFactory.deploy(
@@ -284,7 +284,9 @@ describe("PositiveTestCases", () => {
       const RoyaltyAtTransfer = RoyaltyAtTransferNum.div(RoyaltyAtTransferDen);
       const TotalFee = FeeAtMint.add(RoyaltyAtTransfer);
 
-      await subscriptionFactory.connect(serviceProvider1).withdrawFee();
+      await subscriptionFactory
+        .connect(serviceProvider1)
+        .withdrawFee(serviceProvider1.address);
 
       console.log(await currency.balanceOf(serviceProvider1.address));
       console.log(TotalFee);
