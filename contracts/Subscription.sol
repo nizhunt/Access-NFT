@@ -7,13 +7,17 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-contract Accessup is Ownable, ERC1155 {
+/// @title AcceSsup: An access management protocol
+/// @author Nishant Singh github:nizhunt twitter:@nizhunt ens:nizhunt.eth
+/// @notice Access management protocol with royalty and renting feature
+
+contract AcceSsup is Ownable, ERC1155 {
     using Counters for Counters.Counter;
     using ECDSA for bytes32;
-    // Qn: Why is royaltyPerUnitValidity a part of Subscription struct and not Content struct?
-    // Ans: We don't want the ServiceProvider to have the access to change a subscription's terms once the subscription is minted.
+    // Qn: Why is royaltyPerUnitValidity a part of Access struct and not Content struct?
+    // Ans: We don't want the ServiceProvider to have the access to change a access' terms once the access is minted.
 
-    struct Subscription {
+    struct Access {
         uint256 expiry;
         uint256 fee;
         uint256 royaltyPerUnitValidity;
@@ -33,25 +37,29 @@ contract Accessup is Ownable, ERC1155 {
         uint256 _contentIdTemporary;
         uint256 _validity;
         address _subscriber;
-        uint256 _royalty;
-        uint256 _subscriptionFee;
+        uint256 _royaltyInPercentage;
+        uint256 _accessFee;
         address _serviceProvider;
     }
 
-    // contentId-->subscriber-->subscription
-    mapping(uint256 => mapping(address => Subscription)) public subscription;
-    mapping(uint256 => Content) public contentIdToContent;
+    // contentId-->subscriber-->access
+    mapping(uint256 => mapping(address => Access)) private access;
+    mapping(uint256 => Content) private contentIdToContent;
     mapping(address => ServiceProvider)
-        public serviceProviderAddressToServiceProvider;
+        private serviceProviderAddressToServiceProvider;
 
     Counters.Counter private contentIdCounter;
-    IERC20 public immutable CURRENCY;
+    IERC20 private immutable CURRENCY;
 
     constructor(address _tokenAddress) ERC1155("") {
         CURRENCY = IERC20(_tokenAddress);
     }
 
-    function setURI(uint256 _contentId, string memory _newUri) public {
+    /// @notice Enables the serviceProvider to set the URI for their content
+    /// @dev This function can only be called by the serviceProvider of the content
+    /// @param _contentId contentId of the content
+    /// @param _newUri The new URI to be set for the content
+    function setURI(uint256 _contentId, string calldata _newUri) public {
         require(
             _contentId < contentIdCounter.current(),
             "setURI: Content doesn't exist"
@@ -61,8 +69,13 @@ contract Accessup is Ownable, ERC1155 {
             "serviceProvider mismatch"
         );
         contentIdToContent[_contentId].uri = _newUri;
+        emit URI(_newUri, _contentId);
     }
 
+    /// @notice Check the URI of a content using it's contentId
+    /// @dev Reverts if the contentId doesn't exist
+    /// @param _contentId The contentId to find URI of
+    /// @return The URI for `_contentId`
     function uri(
         uint256 _contentId
     ) public view override returns (string memory) {
@@ -73,6 +86,10 @@ contract Accessup is Ownable, ERC1155 {
         return contentIdToContent[_contentId].uri;
     }
 
+    /// @notice Sets the Owner for required serviceProvider
+    /// @dev The signature from the serviceProvider will consist of the address of the owner followed by the address of the serviceProvider
+    /// @param _signature The signature from the serviceProvider. The message of this signature should consist of the address of the owner followed by the address of the serviceProvider
+    /// @param _serviceProvider The serviceProvider address the caller of this function wants ownership of.
     function setSPOwner(
         bytes calldata _signature,
         address _serviceProvider
@@ -107,8 +124,8 @@ contract Accessup is Ownable, ERC1155 {
                 address(this),
                 _mintArgs._contentIdTemporary,
                 _mintArgs._validity,
-                _mintArgs._royalty,
-                _mintArgs._subscriptionFee,
+                _mintArgs._royaltyInPercentage,
+                _mintArgs._accessFee,
                 _mintArgs._serviceProvider
             )
         );
@@ -128,37 +145,36 @@ contract Accessup is Ownable, ERC1155 {
         contentIdToContent[_contentId].serviceProvider = _serviceProvider;
     }
 
-    // function check how much time in seconds is left in the subscription
     function checkValidityLeft(
         address _subscriber,
         uint256 _contentId
     ) public view returns (uint256 validityLeft) {
-        uint256 _expiry = subscription[_contentId][_subscriber].expiry;
-        // check time left in subscription
+        uint256 _expiry = access[_contentId][_subscriber].expiry;
+        // check time left in access
         _expiry <= block.timestamp ? validityLeft = 0 : validityLeft =
             _expiry -
             block.timestamp;
     }
 
-    function updateSubscription(
+    function updateAccess(
         uint256 _contentId,
         address _subscriber,
         uint256 _validity,
-        uint256 _royalty,
-        uint256 _subscriptionFee
+        uint256 _royaltyInPercentage,
+        uint256 _accessFee
     ) internal {
-        subscription[_contentId][_subscriber] = Subscription({
+        access[_contentId][_subscriber] = Access({
             expiry: block.timestamp +
                 _validity +
                 checkValidityLeft(_subscriber, _contentId),
-            fee: _subscriptionFee,
+            fee: _accessFee,
             // Scaling: we take royalty input divided by 10^3 ie.
             // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
             // they put input: 5
             royaltyPerUnitValidity: (
                 _validity == 0
                     ? 0
-                    : (_royalty * _subscriptionFee) / 10 ** 3 / _validity
+                    : (_royaltyInPercentage * _accessFee) / 10 ** 3 / _validity
             )
         });
     }
@@ -171,7 +187,7 @@ contract Accessup is Ownable, ERC1155 {
             CURRENCY.transferFrom(
                 msg.sender,
                 address(this),
-                _mintArgs._subscriptionFee
+                _mintArgs._accessFee
             ),
             "Fee Transfer Failed"
         );
@@ -198,25 +214,25 @@ contract Accessup is Ownable, ERC1155 {
             _contentId = _mintArgs._contentIdTemporary;
         }
 
-        updateSubscription(
+        updateAccess(
             _contentId,
             _mintArgs._subscriber,
             _mintArgs._validity,
-            _mintArgs._royalty,
-            _mintArgs._subscriptionFee
+            _mintArgs._royaltyInPercentage,
+            _mintArgs._accessFee
         );
 
         emit NewAccess(
             _contentId,
             _mintArgs._serviceProvider,
             _mintArgs._validity,
-            _mintArgs._subscriptionFee,
+            _mintArgs._accessFee,
             _mintArgs._subscriber,
-            _mintArgs._royalty
+            _mintArgs._royaltyInPercentage
         );
         // Track the payment received  for the serviceProvider
         serviceProviderAddressToServiceProvider[_mintArgs._serviceProvider]
-            .fees += _mintArgs._subscriptionFee;
+            .fees += _mintArgs._accessFee;
 
         // Finally Lets Mint Baby...
         _mint(_mintArgs._subscriber, _contentId, 1, "");
@@ -246,10 +262,10 @@ contract Accessup is Ownable, ERC1155 {
     ) public view returns (uint256 netRoyalty) {
         // Remove the scaling we introduced at at the time of saving the royalty
         netRoyalty = (checkValidityLeft(_subscriber, _contentId) *
-            subscription[_contentId][_subscriber].royaltyPerUnitValidity);
+            access[_contentId][_subscriber].royaltyPerUnitValidity);
     }
 
-    // Before Transferring Ownership, change the storage of subscription details:
+    // Before Transferring Ownership, change the storage of access details:
     function _beforeTokenTransfer(
         address operator,
         address from,
@@ -260,15 +276,15 @@ contract Accessup is Ownable, ERC1155 {
     ) internal virtual override {
         super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
 
-        if (from != address(0)) {
+        if (from != address(0) && from != to) {
             uint256 netRoyalty;
 
             for (uint256 i = 0; i < ids.length; ++i) {
-                subscription[ids[i]][to] = Subscription({
-                    expiry: subscription[ids[i]][from].expiry +
+                access[ids[i]][to] = Access({
+                    expiry: access[ids[i]][from].expiry +
                         checkValidityLeft(to, ids[i]),
-                    fee: subscription[ids[i]][from].fee,
-                    royaltyPerUnitValidity: subscription[ids[i]][from]
+                    fee: access[ids[i]][from].fee,
+                    royaltyPerUnitValidity: access[ids[i]][from]
                         .royaltyPerUnitValidity
                 });
 
@@ -276,7 +292,7 @@ contract Accessup is Ownable, ERC1155 {
                 emit royaltyPaidDuringTransfer(ids[i], royalty);
                 netRoyalty += royalty;
 
-                subscription[ids[i]][from] = Subscription({
+                access[ids[i]][from] = Access({
                     expiry: 0,
                     fee: 0,
                     royaltyPerUnitValidity: 0

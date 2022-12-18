@@ -12,12 +12,10 @@ async function main() {
   await currency.deployed();
   console.log("Currency deployed to:", currency.address);
 
-  const SubscriptionFactory = await hre.ethers.getContractFactory("Accessup");
-  const subscriptionFactory = await SubscriptionFactory.deploy(
-    currency.address
-  );
-  await subscriptionFactory.deployed();
-  console.log("Accessup deployed to:", subscriptionFactory.address);
+  const AccessFactory = await hre.ethers.getContractFactory("AcceSsup");
+  const accessFactory = await AccessFactory.deploy(currency.address);
+  await accessFactory.deployed();
+  console.log("AcceSsup deployed to:", accessFactory.address);
 }
 
 // We recommend this pattern to be able to use async/await everywhere
