@@ -26,11 +26,12 @@ contract AcceSsup is Ownable, ERC1155 {
     struct ServiceProvider {
         address SPOwnerAddress;
         uint256 fees;
+        string serviceProviderUri;
     }
 
     struct Content {
         address serviceProvider;
-        string uri;
+        string contentUri;
     }
 
     struct mintArgs {
@@ -40,6 +41,8 @@ contract AcceSsup is Ownable, ERC1155 {
         uint256 _royaltyInPercentage;
         uint256 _accessFee;
         address _serviceProvider;
+        string _serviceProviderUri;
+        string _contentUri;
     }
 
     // contentId-->subscriber-->access
@@ -51,39 +54,71 @@ contract AcceSsup is Ownable, ERC1155 {
     Counters.Counter private contentIdCounter;
     IERC20 private immutable CURRENCY;
 
-    constructor(address _tokenAddress) ERC1155("") {
+    constructor(
+        address _tokenAddress,
+        string memory _baseUri
+    ) ERC1155(_baseUri) {
         CURRENCY = IERC20(_tokenAddress);
     }
 
-    /// @notice Enables the serviceProvider to set the URI for their content
-    /// @dev This function can only be called by the serviceProvider of the content
-    /// @param _contentId contentId of the content
-    /// @param _newUri The new URI to be set for the content
-    function setURI(uint256 _contentId, string calldata _newUri) public {
-        require(
-            _contentId < contentIdCounter.current(),
-            "setURI: Content doesn't exist"
-        );
-        require(
-            contentIdToContent[_contentId].serviceProvider == msg.sender,
-            "serviceProvider mismatch"
-        );
-        contentIdToContent[_contentId].uri = _newUri;
-        emit URI(_newUri, _contentId);
+    function setBaseUri(string calldata _baseUri) public onlyOwner {
+        _setURI(_baseUri);
+        emit NewBaseUri(_baseUri);
     }
 
-    /// @notice Check the URI of a content using it's contentId
-    /// @dev Reverts if the contentId doesn't exist
-    /// @param _contentId The contentId to find URI of
-    /// @return The URI for `_contentId`
-    function uri(
-        uint256 _contentId
-    ) public view override returns (string memory) {
+    /// @notice Enables the serviceProvider to reset the URI for all contents from them
+    /// @dev This function can only be called by the serviceProvider of the content
+    /// @param _newServiceProviderUri The new URI to be set for the content
+    function setServiceProviderUri(
+        address _serviceProvider,
+        string calldata _newServiceProviderUri
+    ) public onlyServiceProviderOrSPOwner(_serviceProvider) {
+        serviceProviderAddressToServiceProvider[_serviceProvider]
+            .serviceProviderUri = _newServiceProviderUri;
+        emit NewServiceProviderUri(_serviceProvider, _newServiceProviderUri);
+    }
+
+    /// @notice Enables the serviceProvider to reset the URI for their content
+    /// @dev This function can only be called by the serviceProvider of the content
+    /// @param _contentId contentId of the content
+    /// @param _newContentUri The new URI to be set for the content
+    function setContentUri(
+        address _serviceProvider,
+        uint256 _contentId,
+        string calldata _newContentUri
+    ) public onlyServiceProviderOrSPOwner(_serviceProvider) {
         require(
             _contentId < contentIdCounter.current(),
-            "URI: Content doesn't exist"
+            "Content doesn't exist"
         );
-        return contentIdToContent[_contentId].uri;
+        require(
+            contentIdToContent[_contentId].serviceProvider == _serviceProvider,
+            "serviceProvider mismatch"
+        );
+        contentIdToContent[_contentId].contentUri = _newContentUri;
+        emit NewContentUri(_contentId, _newContentUri);
+    }
+
+    function uri(
+        uint256 contentId
+    ) public view override returns (string memory) {
+        string memory _contentUri = contentIdToContent[contentId].contentUri;
+        address _serviceProvider = contentIdToContent[contentId]
+            .serviceProvider;
+        string
+            memory _serviceProviderUri = serviceProviderAddressToServiceProvider[
+                _serviceProvider
+            ].serviceProviderUri;
+
+        // If token URI is set, concatenate base URI and tokenURI (via abi.encodePacked).
+        if (bytes(_serviceProviderUri).length == 0) {
+            return super.uri(contentId);
+        } else {
+            return
+                bytes(_contentUri).length > 0
+                    ? string(abi.encodePacked(_serviceProviderUri, _contentUri))
+                    : _serviceProviderUri;
+        }
     }
 
     /// @notice Sets the Owner for required serviceProvider
@@ -126,7 +161,9 @@ contract AcceSsup is Ownable, ERC1155 {
                 _mintArgs._validity,
                 _mintArgs._royaltyInPercentage,
                 _mintArgs._accessFee,
-                _mintArgs._serviceProvider
+                _mintArgs._serviceProvider,
+                _mintArgs._serviceProviderUri,
+                _mintArgs._contentUri
             )
         );
         require(
@@ -139,10 +176,39 @@ contract AcceSsup is Ownable, ERC1155 {
 
     function setServiceProvider(
         uint256 _contentId,
+        string memory _serviceProviderUri,
+        string memory _contentUri,
         address _serviceProvider
     ) internal {
-        emit NewContent(_serviceProvider, _contentId);
+        /* Setting the ServiceProviderUri */
+        if (
+            bytes(
+                serviceProviderAddressToServiceProvider[_serviceProvider]
+                    .serviceProviderUri
+            ).length ==
+            0 &&
+            bytes(_serviceProviderUri).length != 0
+        ) {
+            serviceProviderAddressToServiceProvider[_serviceProvider]
+                .serviceProviderUri = _serviceProviderUri;
+            emit NewServiceProviderUri(_serviceProvider, _serviceProviderUri);
+        }
+
+        /* Setting the contentUri */
+        if (
+            bytes(
+                serviceProviderAddressToServiceProvider[_serviceProvider]
+                    .serviceProviderUri
+            ).length !=
+            0 &&
+            bytes(_contentUri).length != 0
+        ) {
+            contentIdToContent[_contentId].contentUri = _contentUri;
+            emit NewContentUri(_contentId, _contentUri);
+        }
+
         contentIdToContent[_contentId].serviceProvider = _serviceProvider;
+        emit NewContent(_serviceProvider, _contentId);
     }
 
     function checkValidityLeft(
@@ -202,7 +268,12 @@ contract AcceSsup is Ownable, ERC1155 {
 
         if (_mintArgs._contentIdTemporary == 0) {
             _contentId = _contentIdCurrent;
-            setServiceProvider(_contentId, _mintArgs._serviceProvider);
+            setServiceProvider(
+                _contentId,
+                _mintArgs._serviceProviderUri,
+                _mintArgs._contentUri,
+                _mintArgs._serviceProvider
+            );
             contentIdCounter.increment();
         } else {
             // Restrict other minters once a contentID is mapped to a serviceProvider
@@ -311,8 +382,22 @@ contract AcceSsup is Ownable, ERC1155 {
     }
 
     // enable the service-provider to withdraw all their fee:
-    function withdrawFee(address _serviceProvider) public {
-        // address receiver;
+    function withdrawFee(
+        address _serviceProvider
+    ) public onlyServiceProviderOrSPOwner(_serviceProvider) {
+        uint256 payout = serviceProviderAddressToServiceProvider[
+            _serviceProvider
+        ].fees;
+
+        serviceProviderAddressToServiceProvider[_serviceProvider].fees = 0;
+        require(payout != 0, "you are yet to collect any fee");
+        emit FeeWithdrawn(_serviceProvider, msg.sender, payout);
+        CURRENCY.transfer(msg.sender, payout);
+    }
+
+    // modifiers:
+
+    modifier onlyServiceProviderOrSPOwner(address _serviceProvider) {
         address spOwner = serviceProviderAddressToServiceProvider[
             _serviceProvider
         ].SPOwnerAddress;
@@ -326,14 +411,7 @@ contract AcceSsup is Ownable, ERC1155 {
             );
         }
 
-        uint256 payout = serviceProviderAddressToServiceProvider[
-            _serviceProvider
-        ].fees;
-
-        serviceProviderAddressToServiceProvider[_serviceProvider].fees = 0;
-        require(payout != 0, "you are yet to collect any fee");
-        emit FeeWithdrawn(_serviceProvider, msg.sender, payout);
-        CURRENCY.transfer(msg.sender, payout);
+        _;
     }
 
     // events:
@@ -354,6 +432,15 @@ contract AcceSsup is Ownable, ERC1155 {
     event FeeWithdrawn(address serviceProvider, address owner, uint256 fee);
 
     event SPOwnerSet(address serviceProvider, address SPOwner);
+
+    event NewBaseUri(string baseUri);
+
+    event NewServiceProviderUri(
+        address serviceProvider,
+        string serviceProviderUri
+    );
+
+    event NewContentUri(uint256 contentId, string contentUri);
 
     event royaltyPaidDuringTransfer(uint256 contentId, uint256 royaltyPaid);
 }
