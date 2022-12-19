@@ -18,9 +18,12 @@ contract AcceSsup is Ownable, ERC1155 {
     // Ans: We don't want the ServiceProvider to have the access to change a access' terms once the access is minted.
 
     struct Access {
-        uint256 expiry;
+        uint256 starts;
+        uint256 expires;
         uint256 fee;
         uint256 royaltyPerUnitValidity;
+        uint64 onRentFrom; // unix timestamp
+        uint64 onRentTill; // unix timestamp
     }
 
     struct ServiceProvider {
@@ -36,7 +39,8 @@ contract AcceSsup is Ownable, ERC1155 {
 
     struct mintArgs {
         uint256 _contentIdTemporary;
-        uint256 _validity;
+        uint256 _starts;
+        uint256 _expires;
         address _subscriber;
         uint256 _royaltyInPercentage;
         uint256 _accessFee;
@@ -158,7 +162,8 @@ contract AcceSsup is Ownable, ERC1155 {
             abi.encodePacked(
                 address(this),
                 _mintArgs._contentIdTemporary,
-                _mintArgs._validity,
+                _mintArgs._starts,
+                _mintArgs._expires,
                 _mintArgs._royaltyInPercentage,
                 _mintArgs._accessFee,
                 _mintArgs._serviceProvider,
@@ -215,7 +220,7 @@ contract AcceSsup is Ownable, ERC1155 {
         address _subscriber,
         uint256 _contentId
     ) public view returns (uint256 validityLeft) {
-        uint256 _expiry = access[_contentId][_subscriber].expiry;
+        uint256 _expiry = access[_contentId][_subscriber].expires;
         // check time left in access
         _expiry <= block.timestamp ? validityLeft = 0 : validityLeft =
             _expiry -
@@ -225,14 +230,15 @@ contract AcceSsup is Ownable, ERC1155 {
     function updateAccess(
         uint256 _contentId,
         address _subscriber,
-        uint256 _validity,
+        uint256 _starts,
+        uint256 _expires,
         uint256 _royaltyInPercentage,
         uint256 _accessFee
     ) internal {
+        uint256 _validity = _expires - _starts;
         access[_contentId][_subscriber] = Access({
-            expiry: block.timestamp +
-                _validity +
-                checkValidityLeft(_subscriber, _contentId),
+            starts: _starts,
+            expires: _expires,
             fee: _accessFee,
             // Scaling: we take royalty input divided by 10^3 ie.
             // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
@@ -241,7 +247,9 @@ contract AcceSsup is Ownable, ERC1155 {
                 _validity == 0
                     ? 0
                     : (_royaltyInPercentage * _accessFee) / 10 ** 3 / _validity
-            )
+            ),
+            onRentFrom: 0,
+            onRentTill: 0
         });
     }
 
@@ -288,7 +296,8 @@ contract AcceSsup is Ownable, ERC1155 {
         updateAccess(
             _contentId,
             _mintArgs._subscriber,
-            _mintArgs._validity,
+            _mintArgs._starts,
+            _mintArgs._expires,
             _mintArgs._royaltyInPercentage,
             _mintArgs._accessFee
         );
@@ -296,7 +305,8 @@ contract AcceSsup is Ownable, ERC1155 {
         emit NewAccess(
             _contentId,
             _mintArgs._serviceProvider,
-            _mintArgs._validity,
+            _mintArgs._starts,
+            _mintArgs._expires,
             _mintArgs._accessFee,
             _mintArgs._subscriber,
             _mintArgs._royaltyInPercentage
@@ -316,6 +326,62 @@ contract AcceSsup is Ownable, ERC1155 {
         bytes memory data
     ) public onlyOwner {
         _mintBatch(to, ids, amounts, data);
+    }
+
+    function rentAccess(
+        uint256 _contentId,
+        address _accessLender,
+        address _accessBorrower,
+        uint64 _rentedFrom,
+        uint64 _rentedTill
+    ) public {
+        require(
+            _accessLender == _msgSender() ||
+                isApprovedForAll(_accessLender, _msgSender()),
+            "caller is not access owner nor approved"
+        );
+        uint256 lenderStarts = access[_contentId][_accessLender].starts;
+        uint256 lenderExpires = access[_contentId][_accessLender].expires;
+
+        uint256 borrowerStarts = access[_contentId][_accessLender].starts;
+        uint256 borrowerExpires = access[_contentId][_accessLender].expires;
+
+        require(
+            lenderStarts <= _rentedFrom &&
+                _rentedFrom <= _rentedTill &&
+                _rentedTill <= lenderExpires,
+            "Lender Timeline dispute"
+        );
+
+        require(
+            borrowerExpires <= _rentedFrom || _rentedTill <= borrowerStarts,
+            "Borrower Timeline dispute"
+        );
+
+        uint256 royaltyPerUnitValidity = access[_contentId][_accessLender]
+            .royaltyPerUnitValidity;
+
+        uint256 netRoyalty = (_rentedTill - _rentedFrom) *
+            royaltyPerUnitValidity;
+
+        require(
+            CURRENCY.transferFrom(msg.sender, address(this), netRoyalty),
+            "Pay Royalty Fee"
+        );
+
+        address serviceProvider = contentIdToContent[_contentId]
+            .serviceProvider;
+        serviceProviderAddressToServiceProvider[serviceProvider]
+            .fees += netRoyalty;
+
+        access[_contentId][_accessBorrower] = Access({
+            starts: _rentedFrom,
+            expires: _rentedTill,
+            fee: 0,
+            royaltyPerUnitValidity: royaltyPerUnitValidity,
+            onRentFrom: 0, // unix timestamp
+            onRentTill: 0 // unix timestamp})
+        });
     }
 
     // function for the ServiceProvider Contracts to know what ContentId to put to new content mint.
@@ -351,12 +417,20 @@ contract AcceSsup is Ownable, ERC1155 {
             uint256 netRoyalty;
 
             for (uint256 i = 0; i < ids.length; ++i) {
+                require(
+                    access[ids[i]][from].onRentTill < block.timestamp,
+                    "Access on rent!"
+                );
+
                 access[ids[i]][to] = Access({
-                    expiry: access[ids[i]][from].expiry +
+                    starts: access[ids[i]][from]. +
                         checkValidityLeft(to, ids[i]),
+                    expires: 
                     fee: access[ids[i]][from].fee,
                     royaltyPerUnitValidity: access[ids[i]][from]
-                        .royaltyPerUnitValidity
+                        .royaltyPerUnitValidity,
+                    onRentFrom: 0,
+                    onRentTill: 0
                 });
 
                 uint256 royalty = checkNetRoyalty(from, ids[i]);
@@ -366,7 +440,9 @@ contract AcceSsup is Ownable, ERC1155 {
                 access[ids[i]][from] = Access({
                     expiry: 0,
                     fee: 0,
-                    royaltyPerUnitValidity: 0
+                    royaltyPerUnitValidity: 0,
+                    rentedFrom: 0,
+                    rentedTill: 0
                 });
                 address serviceProvider = contentIdToContent[ids[i]]
                     .serviceProvider;
