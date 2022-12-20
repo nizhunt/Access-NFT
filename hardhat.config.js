@@ -2,6 +2,7 @@ require("@nomicfoundation/hardhat-toolbox");
 require("@nomiclabs/hardhat-etherscan");
 require("hardhat-gas-reporter");
 require("solidity-coverage");
+require("hardhat-contract-sizer");
 require("dotenv").config();
 
 /** @type import('hardhat/config').HardhatUserConfig */
@@ -31,5 +32,11 @@ module.exports = {
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN,
+  },
+  contractSizer: {
+    alphaSort: false,
+    disambiguatePaths: false,
+    runOnCompile: true,
+    strict: true,
   },
 };

@@ -22,8 +22,8 @@ contract AcceSsup is Ownable, ERC1155 {
         uint256 expires;
         uint256 fee;
         uint256 royaltyPerUnitValidity;
-        uint64 onRentFrom; // unix timestamp
-        uint64 onRentTill; // unix timestamp
+        uint256[] onRentFrom; // unix timestamp
+        uint256[] onRentTill; // unix timestamp
     }
 
     struct ServiceProvider {
