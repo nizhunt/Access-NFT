@@ -236,6 +236,11 @@ contract AcceSsup is Ownable, ERC1155 {
         uint256 _accessFee
     ) internal {
         uint256 _validity = _expires - _starts;
+
+        Access _existingAccess = access[_contentId][_subscriber];
+        
+        uint256 pendingValidity = _existingAccess.expires
+
         access[_contentId][_subscriber] = Access({
             starts: _starts,
             expires: _expires,
