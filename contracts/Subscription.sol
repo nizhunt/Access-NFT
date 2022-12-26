@@ -17,6 +17,8 @@ contract AcceSsup is Ownable, ERC1155 {
     // Qn: Why is royaltyPerUnitValidity a part of Access struct and not Content struct?
     // Ans: We don't want the ServiceProvider to have the access to change a access' terms once the access is minted.
 
+    uint256 public noOfTimesCanRent;
+
     struct Access {
         uint256 starts;
         uint256 expires;
@@ -60,9 +62,11 @@ contract AcceSsup is Ownable, ERC1155 {
 
     constructor(
         address _tokenAddress,
-        string memory _baseUri
+        string memory _baseUri,
+        uint256 _noOfTimesCanRent
     ) ERC1155(_baseUri) {
         CURRENCY = IERC20(_tokenAddress);
+        noOfTimesCanRent = _noOfTimesCanRent;
     }
 
     function setBaseUri(string calldata _baseUri) public onlyOwner {
@@ -227,7 +231,7 @@ contract AcceSsup is Ownable, ERC1155 {
             block.timestamp;
     }
 
-    function updateAccess(
+    function generateAccess(
         uint256 _contentId,
         address _subscriber,
         uint256 _starts,
@@ -235,33 +239,96 @@ contract AcceSsup is Ownable, ERC1155 {
         uint256 _royaltyInPercentage,
         uint256 _accessFee
     ) internal {
-        uint256 _validity = _expires - _starts;
+        Access memory _existingAccess = access[_contentId][_subscriber];
 
-        Access _existingAccess = access[_contentId][_subscriber];
-        
-        uint256 pendingValidity = _existingAccess.expires
+        /* If the subscriber is minting this nft for the first time:  */
+        if (
+            _existingAccess.expires == 0 ||
+            block.timestamp >= _existingAccess.expires
+        ) {
+            uint256 _validity = _expires - _starts;
 
-        access[_contentId][_subscriber] = Access({
-            starts: _starts,
-            expires: _expires,
-            fee: _accessFee,
-            // Scaling: we take royalty input divided by 10^3 ie.
-            // if serviceProvider needs royalty to be 0.5% ie. 0.005*fee
-            // they put input: 5
-            royaltyPerUnitValidity: (
-                _validity == 0
-                    ? 0
-                    : (_royaltyInPercentage * _accessFee) / 10 ** 3 / _validity
-            ),
-            onRentFrom: 0,
-            onRentTill: 0
-        });
+            access[_contentId][_subscriber] = Access({
+                starts: _starts,
+                expires: _expires,
+                fee: _accessFee,
+                /*  Scaling: we take royalty input divided by 10^3 ie. if serviceProvider needs royalty to be 0.5% ie. 0.005*fee, they put input: 5 */
+                royaltyPerUnitValidity: (
+                    _validity == 0
+                        ? 0
+                        : (_royaltyInPercentage * _accessFee) /
+                            10 ** 3 /
+                            _validity
+                ),
+                onRentFrom: new uint[](0),
+                onRentTill: new uint[](0)
+            });
+        } else {
+            /* If the subscriber has had this subscription bought or rented before: 
+
+        1. They might be having some validity left in the previous subscription, calculate that residualValidity 
+
+        2. They might have rented some portion of that residualValidity out, subtract that from the residualValidity
+
+        3. Add the residual validity to the expires param */
+
+            uint256 residualRentValidity;
+
+            for (uint256 i; i < _existingAccess.onRentFrom.length; i++) {
+                if (_existingAccess.onRentTill[i] > _starts) {
+                    if (_existingAccess.onRentFrom[i] < _starts) {
+                        residualRentValidity +=
+                            _existingAccess.onRentTill[i] -
+                            _starts;
+                    } else {
+                        residualRentValidity +=
+                            _existingAccess.onRentTill[i] -
+                            _existingAccess.onRentFrom[i];
+                    }
+                }
+            }
+            uint256 _residualValidity = _existingAccess.expires -
+                _starts -
+                residualRentValidity;
+
+            uint256 _validity = _expires - _starts;
+            uint[] memory emptyArray = new uint[](0);
+
+            access[_contentId][_subscriber] = Access({
+                starts: _starts,
+                expires: _expires + _residualValidity,
+                fee: _accessFee,
+                /*  Scaling: we take royalty input divided by 10^3 ie. if serviceProvider needs royalty to be 0.5% ie. 0.005*fee, they put input: 5 */
+                royaltyPerUnitValidity: (
+                    _validity == 0
+                        ? 0
+                        : (_royaltyInPercentage * _accessFee) /
+                            10 ** 3 /
+                            _validity
+                ),
+                onRentFrom: emptyArray,
+                onRentTill: emptyArray
+            });
+        }
+
+        /* 
+        Quirk: 
+
+        If the new subscription starts and ends before the starting of existing subscription, the existing subscription washes off and the validity of the existing future subscription and the validity in the existing future subscription is added to new subscription's validity 
+
+        If you have an ongoing subscription and minting another subscription for the future ie. when this subscription ends, the existing subscription washes off and the remaining validity is added to the new subscription
+
+        @audit-note check how these quirks can be avoided in a legit manner
+
+
+        */
     }
 
     function mint(
         mintArgs calldata _mintArgs,
         bytes calldata _serviceProviderSignature
     ) public VerifiedServiceProvider(_mintArgs, _serviceProviderSignature) {
+        /* Check if the payment for the mint is done or not */
         require(
             CURRENCY.transferFrom(
                 msg.sender,
@@ -271,16 +338,20 @@ contract AcceSsup is Ownable, ERC1155 {
             "Fee Transfer Failed"
         );
 
-        // Bound the caller to follow the contentIdCounter sequence:
         uint256 _contentId;
+
+        /* Bound the caller to follow the contentIdCounter sequence: */
         uint256 _contentIdCurrent = contentIdCounter.current();
         require(
             _mintArgs._contentIdTemporary <= _contentIdCurrent,
             "Content Id doesn't exist"
         );
 
+        /* If it's a new content, do this: */
         if (_mintArgs._contentIdTemporary == 0) {
             _contentId = _contentIdCurrent;
+
+            /* Generate a new serviceProvider: */
             setServiceProvider(
                 _contentId,
                 _mintArgs._serviceProviderUri,
@@ -289,7 +360,9 @@ contract AcceSsup is Ownable, ERC1155 {
             );
             contentIdCounter.increment();
         } else {
-            // Restrict other minters once a contentID is mapped to a serviceProvider
+            /* If the content already exists, do this: */
+
+            /* Check if the serviceProvider matches the content */
             require(
                 contentIdToContent[_mintArgs._contentIdTemporary]
                     .serviceProvider == _mintArgs._serviceProvider,
@@ -298,7 +371,8 @@ contract AcceSsup is Ownable, ERC1155 {
             _contentId = _mintArgs._contentIdTemporary;
         }
 
-        updateAccess(
+        /* Generate a new Access */
+        generateAccess(
             _contentId,
             _mintArgs._subscriber,
             _mintArgs._starts,
@@ -316,11 +390,11 @@ contract AcceSsup is Ownable, ERC1155 {
             _mintArgs._subscriber,
             _mintArgs._royaltyInPercentage
         );
-        // Track the payment received  for the serviceProvider
+        /* Track the payment received  for the serviceProvider */
         serviceProviderAddressToServiceProvider[_mintArgs._serviceProvider]
             .fees += _mintArgs._accessFee;
 
-        // Finally Lets Mint Baby...
+        /* Finally Lets Mint Baby... */
         _mint(_mintArgs._subscriber, _contentId, 1, "");
     }
 
@@ -337,37 +411,40 @@ contract AcceSsup is Ownable, ERC1155 {
         uint256 _contentId,
         address _accessLender,
         address _accessBorrower,
-        uint64 _rentedFrom,
-        uint64 _rentedTill
+        uint256 _rentedFrom,
+        uint256 _rentedTill
     ) public {
         require(
             _accessLender == _msgSender() ||
                 isApprovedForAll(_accessLender, _msgSender()),
             "caller is not access owner nor approved"
         );
-        uint256 lenderStarts = access[_contentId][_accessLender].starts;
-        uint256 lenderExpires = access[_contentId][_accessLender].expires;
+        Access memory lenderAccess = access[_contentId][_accessLender];
 
-        uint256 borrowerStarts = access[_contentId][_accessLender].starts;
         uint256 borrowerExpires = access[_contentId][_accessLender].expires;
 
+        /* Lender can only lend from within the time-frame they have the access to the content*/
         require(
-            lenderStarts <= _rentedFrom &&
+            lenderAccess.starts <= _rentedFrom &&
                 _rentedFrom <= _rentedTill &&
-                _rentedTill <= lenderExpires,
+                _rentedTill <= lenderAccess.expires,
             "Lender Timeline dispute"
         );
 
-        require(
-            borrowerExpires <= _rentedFrom || _rentedTill <= borrowerStarts,
-            "Borrower Timeline dispute"
-        );
+        /* @audit check if the lender has already sold this time-slot */
 
-        uint256 royaltyPerUnitValidity = access[_contentId][_accessLender]
-            .royaltyPerUnitValidity;
+        /* The borrower should not already have an access to this content from the time of borrowing onwards...
+
+        If someone had the access in the past(bought or rented) but now it's over, they can rent it again
+        
+        If someone has an access to a content in future but wants the access now, they should buy the access, can't rent it.
+        */
+        require(borrowerExpires <= _rentedFrom, "Borrower Timeline dispute");
+
+        /* Calculate the royalty and pay it to the serviceProvider */
 
         uint256 netRoyalty = (_rentedTill - _rentedFrom) *
-            royaltyPerUnitValidity;
+            lenderAccess.royaltyPerUnitValidity;
 
         require(
             CURRENCY.transferFrom(msg.sender, address(this), netRoyalty),
@@ -379,14 +456,20 @@ contract AcceSsup is Ownable, ERC1155 {
         serviceProviderAddressToServiceProvider[serviceProvider]
             .fees += netRoyalty;
 
+        /* Update the rent-terms for the Borrower */
         access[_contentId][_accessBorrower] = Access({
             starts: _rentedFrom,
             expires: _rentedTill,
             fee: 0,
-            royaltyPerUnitValidity: royaltyPerUnitValidity,
-            onRentFrom: 0, // unix timestamp
-            onRentTill: 0 // unix timestamp})
+            royaltyPerUnitValidity: lenderAccess.royaltyPerUnitValidity,
+            onRentFrom: new uint[](0), // unix timestamp
+            onRentTill: new uint[](0) // unix timestamp})
         });
+
+        /* Update the rent-terms for the Lender */
+
+        access[_contentId][_accessLender].onRentFrom.push(_rentedFrom);
+        access[_contentId][_accessLender].onRentFrom.push(_rentedTill);
     }
 
     // function for the ServiceProvider Contracts to know what ContentId to put to new content mint.
@@ -417,37 +500,25 @@ contract AcceSsup is Ownable, ERC1155 {
         bytes memory data
     ) internal virtual override {
         super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
+        // @audit write gate-keeping conditions for transfer
 
         if (from != address(0) && from != to) {
             uint256 netRoyalty;
 
             for (uint256 i = 0; i < ids.length; ++i) {
-                require(
-                    access[ids[i]][from].onRentTill < block.timestamp,
-                    "Access on rent!"
-                );
-
-                access[ids[i]][to] = Access({
-                    starts: access[ids[i]][from]. +
-                        checkValidityLeft(to, ids[i]),
-                    expires: 
-                    fee: access[ids[i]][from].fee,
-                    royaltyPerUnitValidity: access[ids[i]][from]
-                        .royaltyPerUnitValidity,
-                    onRentFrom: 0,
-                    onRentTill: 0
-                });
+                /* @audit changes in [to] */
 
                 uint256 royalty = checkNetRoyalty(from, ids[i]);
                 emit royaltyPaidDuringTransfer(ids[i], royalty);
                 netRoyalty += royalty;
 
                 access[ids[i]][from] = Access({
-                    expiry: 0,
+                    starts: 0,
+                    expires: 0,
                     fee: 0,
                     royaltyPerUnitValidity: 0,
-                    rentedFrom: 0,
-                    rentedTill: 0
+                    onRentFrom: new uint[](0),
+                    onRentTill: new uint[](0)
                 });
                 address serviceProvider = contentIdToContent[ids[i]]
                     .serviceProvider;
@@ -501,7 +572,8 @@ contract AcceSsup is Ownable, ERC1155 {
     event NewAccess(
         uint256 contentId,
         address serviceProvider,
-        uint256 validity,
+        uint256 starts,
+        uint256 expires,
         uint256 fee,
         address subscriber,
         uint256 royalty
