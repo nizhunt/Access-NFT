@@ -40,5 +40,5 @@ Bob, who bought the subscription NFT from Alice at a cheap rate and with less va
 ### Basically an Opensea for the Subscription NFTs.
 
 testnet deployment:
-Currency deployed to: 0x64bbC95C0D70fc000B711fc01eDFC2806Ac20564
-subscriptionFactory deployed to: 0xec8911401bf6a590b518f8BC4DeC33441FDF7e74
+Currency deployed to: 0xe4dF7150c7cB657e33d0AfeF7FEa283988e92167
+AcceSsup deployed to: 0xA1aD0eE2ac094cFE69eB496E9D4CaF1A6e5ffD39

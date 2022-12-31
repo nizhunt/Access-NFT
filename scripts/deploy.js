@@ -13,7 +13,7 @@ async function main() {
   console.log("Currency deployed to:", currency.address);
 
   const AccessFactory = await hre.ethers.getContractFactory("AcceSsup");
-  const accessFactory = await AccessFactory.deploy(currency.address);
+  const accessFactory = await AccessFactory.deploy(currency.address, "");
   await accessFactory.deployed();
   console.log("AcceSsup deployed to:", accessFactory.address);
 }
