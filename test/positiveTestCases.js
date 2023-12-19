@@ -66,7 +66,7 @@ describe("PositiveTestCases", () => {
       "AcceSsup",
       accessDeployer
     );
-    const accessFactory = await AccessFactory.deploy(currency.address);
+    const accessFactory = await AccessFactory.deploy(currency.address, "");
 
     return {
       currency,
@@ -88,7 +88,7 @@ describe("PositiveTestCases", () => {
       "AcceSsup",
       accessDeployer
     );
-    const accessFactory = await AccessFactory.deploy(currency.address);
+    const accessFactory = await AccessFactory.deploy(currency.address, "");
     // @audit increase id and mint, try putting not minted latest id to mint
     await currency
       .connect(currencyDeployer)
